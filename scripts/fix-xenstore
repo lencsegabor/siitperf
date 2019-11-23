@@ -1,0 +1,2 @@
+root@p094:/usr/lib/x86_64-linux-gnu# ln -s libxenstore.so.3.0 libxenstore.so
+

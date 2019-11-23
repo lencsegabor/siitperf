@@ -1,0 +1,6 @@
+killall binary-rate-alg.sh*
+killall siitperf
+rm nohup.out
+rm ratetest.log
+rm rate.csv
+
