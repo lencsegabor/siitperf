@@ -51,44 +51,44 @@ The settings for the "siitperf.conf" configuration file demonstrated on and exam
                                                2001:2:0:8000::1/64
 
 Then "siitperf.conf" has the following content:
- 
- IP-L-Vers 6 # Left Sender's IP version for foreground traffic
- IP-R-Vers 4 # Right Sender's IP version for foreground traffic
- 
- IPv6-L-Real 2001:2:0:0::2
- IPv6-L-Virt :: # currently not used
- IPv6-R-Real 2001:2:0:8000::2
- IPv6-R-Virt 2001:2:0:1000::2
- IPv4-L-Real 0.0.0.0 # currently unused
- IPv4-L-Virt 198.18.0.2
- IPv4-R-Real 198.19.0.2
- IPv4-R-Virt 0.0.0.0 # currently unused
- 
- MAC-L-Tester a0:36:9f:c5:fa:1c # StarBED p094 enp5s0f0
- MAC-R-Tester a0:36:9f:c5:fa:1e # StarBED p094 enp5s0f1
- MAC-L-DUT a0:36:9f:c5:e6:58 # StarBED p095 enp5s0f0
- MAC-R-DUT a0:36:9f:c5:e6:5a # StarBED p095 enp5s0f1
- 
- Forward 1 # left to right direction is active
- Reverse 1 # right to left direction is active
- Promisc 0 # no promiscuous mode for receiving
- 
- Num-L-Nets 1 # Use only a single src. and dst. address pair
- Num-R-Nets 1 # Max. 256 destination networks are supported
- 
- CPU-L-Send 2 # Left Sender runs on this core
- CPU-R-Recv 4 # Right Receiver runs on this core
- CPU-R-Send 6 # Right Sender runs on this core
- CPU-L-Recv 8 # Left Receiver runs on this core
- 
- MEM-Channels 2 # Number of Memory Channels
- 
+	
+	IP-L-Vers 6 # Left Sender's IP version for foreground traffic
+	IP-R-Vers 4 # Right Sender's IP version for foreground traffic
+	
+	IPv6-L-Real 2001:2:0:0::2
+	IPv6-L-Virt :: # currently not used
+	IPv6-R-Real 2001:2:0:8000::2
+	IPv6-R-Virt 2001:2:0:1000::2
+	IPv4-L-Real 0.0.0.0 # currently unused
+	IPv4-L-Virt 198.18.0.2
+	IPv4-R-Real 198.19.0.2
+	IPv4-R-Virt 0.0.0.0 # currently unused
+	
+	MAC-L-Tester a0:36:9f:c5:fa:1c # StarBED p094 enp5s0f0
+	MAC-R-Tester a0:36:9f:c5:fa:1e # StarBED p094 enp5s0f1
+	MAC-L-DUT a0:36:9f:c5:e6:58 # StarBED p095 enp5s0f0
+	MAC-R-DUT a0:36:9f:c5:e6:5a # StarBED p095 enp5s0f1
+	
+	Forward 1 # left to right direction is active
+	Reverse 1 # right to left direction is active
+	Promisc 0 # no promiscuous mode for receiving
+	
+	Num-L-Nets 1 # Use only a single src. and dst. address pair
+	Num-R-Nets 1 # Max. 256 destination networks are supported
+	
+	CPU-L-Send 2 # Left Sender runs on this core
+	CPU-R-Recv 4 # Right Receiver runs on this core
+	CPU-R-Send 6 # Right Sender runs on this core
+	CPU-L-Recv 8 # Left Receiver runs on this core
+	
+	MEM-Channels 2 # Number of Memory Channels
+	
 
 All three programs use the same "siitperf.conf" file, and their command line parametes are also very similar. They use the following ones:
 
- ./build/siitperf-tp <IPv6 size> <rate> <duration> <global timeout> <n> <m>
- ./build/siitperf-lat <IPv6 size> <rate> <duration> <global timeout> <n> <m> <delay> <timestamps>
- ./build/siitperf-pdv <IPv6 size> <rate> <duration> <global timeout> <n> <m> <frame timeout>
+	./build/siitperf-tp <IPv6 size> <rate> <duration> <global timeout> <n> <m>
+	./build/siitperf-lat <IPv6 size> <rate> <duration> <global timeout> <n> <m> <delay> <timestamps>
+	./build/siitperf-pdv <IPv6 size> <rate> <duration> <global timeout> <n> <m> <frame timeout>
 
 The command line parameters are to be interpreted as follows:
 
