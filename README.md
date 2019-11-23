@@ -115,4 +115,16 @@ __frame timeout__: frame timeout (in milliseconds). If the value of this paramet
 
 We note that the specified frames size always interpreted as IPv6 frame sizes, even if pure IPv4 measurements are done (both sides are configured as IPv4 and there is no backround traffic), and in this case the allowed range is 84-1538, to be able to use 84-1518 bytes long IPv4 frames.
 
+The execution of the measurements are supported by the follwing scripts:
+
+__binary-rate-alg.sh__: Implements a binary search for througput measurements using siitperf-tp.
+
+__frame-loss.sh-scan__: Performs frame loss rate measurements using siitperf-tp. The frames rates to be tested can be specified by the range and stepping. The frame sizes to be tested may also be listed.
+
+__latency.sh__: Performs latency measurements using siitperf-lat.
+
+__pdv.sh__: Performs PDV  measurements using siitperf-pdv.
+
+__binary-rate-alg.sh-pdv__:  Implements a binary search for special througput measurements using siitperf-pdv.
+
 
