@@ -1,7 +1,7 @@
 siitperf
 ========
 
-Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK
+Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK, and it can be used under the Linux operating system.
 
 Introduction
 ------------
@@ -21,6 +21,8 @@ Siitperf implements the most important measurement procedures of RFC 8219, namel
                        +--------------------+
 
 Where X and Y are in {4, 6}, and even though SIIT implies that X <> Y, siitperf allows X=Y, thus siitperf can also be used as a classic RFC 2544 / RFC 5180 Tester. Siitperf was designed for research purposes, and it is quite resilient and tuneable, no constant values are "wired in", rather it takes a lot of parameters either from its "siitperf.conf" configuration file, or from command line.
+
+We note that testing with bidirectional traffic is a requirement, testing with unidirectional traffic is optional.
 
 The package consists of three similar but different programs: siitperf-tp, siitperf-lat, siitperf-pdv. They serve the following purposes:
 - siitperf-tp: Througput and Frame Loss Rate measurements
@@ -128,3 +130,24 @@ __pdv.sh__: Performs PDV  measurements using siitperf-pdv.
 __binary-rate-alg.sh-pdv__:  Implements a binary search for special througput measurements using siitperf-pdv.
 
 Warning: the scripts were written for personal use of the author of siitperf at the NICT StarBED environment. They are included to be rather samples than ready to use scripts for other users. They should be read and understood before use.
+
+Hardware and Software Requirements
+----------------------------------
+
+As siitperf uses DPDK (Intel Data Plane Development Kit), a requirement is to use DPDK compatible hardware as Tester.
+The list of supported NICs is available from: https://core.dpdk.org/supported/ 
+
+As for time measurements, siitperf relies on the rte_rdtsc() DPDK function, which executes the RDTSC instuction of Intel CPUs. RDTSC is also implemented by several AMD CPUs. To produce reliable results, the CPU needs to support constant TSC. (In Intel terminology, the CPU needs to have the "constant_tsc" flag.)
+
+Although siitperf is likely to run on most Linux disributions, we have tested it under Debian 9.9 only, and our DPDK version was: 16.11.9-1+deb9u1.
+
+Siitperf uses a separate core for sending and receiving in each directions, thus it requirest 4 CPU cores for bidirectional traffic besides the main core used for executing the main program. The 4 cores should be reserved at boot time to avoid interference with other programs. We used the following line in "/etc/default/grub":
+
+	GRUB_CMDLINE_LINUX_DEFAULT="quiet isolcpus=2,4,6,8 hugepagesz=1G hugepages=32"
+
+As it can be also seen, we used 1GB hugepages. If your CPU does not have the "pdpe1gb" flag, but it has the "pse" flag then, 2M hugepages will still do. (We have also sortly tested it.) Our relevant setting for 1GB hugepages in the "/etc/fstab" file was:
+
+	nodev   /mnt/huge_1GB hugetlbfs pagesize=1GB 0 0
+
+
+
