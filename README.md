@@ -20,7 +20,7 @@ Siitperf implements the most important measurement procedures of RFC 8219, namel
                        |                    |
                        +--------------------+
 
-Where X and Y are in {4, 6}, and even though SIIT implies that X <> Y, siitperf allows X=Y, thus siitperf can also be used as a classic RFC 2544 / RFC 5180 Tester. Siitperf was designed for research purposes, and it is quite resilient and tuneable, no constant values are "wired in", rather it takes a lot of parameters either from its "siitperf.conf" configuration file, or from command line.
+Where X and Y are in {4, 6}, and even though SIIT implies that X != Y, siitperf allows X==Y, thus siitperf can also be used as a classic RFC 2544 / RFC 5180 Tester. Siitperf was designed for research purposes, and it is quite resilient and tuneable, no constant values are "wired in", rather it takes a lot of parameters either from its "siitperf.conf" configuration file, or from command line.
 
 We note that testing with bidirectional traffic is a requirement, testing with unidirectional traffic is optional.
 
@@ -36,7 +36,7 @@ All three programs perform an elementary test (for 60 seconds, or whatever is se
 Operation
 ---------
 
-The settings for the "siitperf.conf" configuration file demonstrated on and example of benchmarking a stateless NAT64 gateway, where IPv6 and IPv4 are on the left and right side, respectively, and EAM (Explicit Address Mapping) is used. Test and traffic setup is shown below. Note that addresses i parenthesis are NOT assigned to the interfaces, they are written there for the convenience of the reader only.
+The settings for the "siitperf.conf" configuration file demonstrated on an example of benchmarking a stateless NAT64 gateway, where IPv6 and IPv4 are assigned to the left and right side interfaces of the devices, respectively, and EAM (Explicit Address Mapping) is used. Test and traffic setup is shown below. Note that addresses in parenthesis are NOT assigned to the interfaces, they are written there for the convenience of the reader only.
 
                                                2001:2:0:8000::2/64
          2001:2::2/64  +--------------------+  198.19.0.2/24
@@ -51,6 +51,16 @@ The settings for the "siitperf.conf" configuration file demonstrated on and exam
          2001:2::1/64  |                    |  198.19.0.1/24
          (198.18.0.1)  +--------------------+  (2001:2:0:1000::1)
                                                2001:2:0:8000::1/64
+
+
+              Explicit Address Mapping Table of the DUT:
+
+              +----------------+----------------------+
+              | IPv4 Prefix    | IPv6 Prefix          |
+              +----------------+----------------------+
+              | 198.18.0.0/24  | 2001:2::/120         |
+              | 198.19.0.0/24  | 2001:2:0:1000::/120  |
+              +----------------+----------------------+
 
 Then "siitperf.conf" has the following content:
 	
@@ -102,10 +112,9 @@ __duration__: duration of testing (in seconds, 1-3600)
 
 __global timeout__: global timeout (in milliseconds), the tester stops receiving, when this global timeout elapsed after sending finished
 
-__n__ and __m__: they are two relative prime numbers for specifying the proportion of foreground and background traffic (see below).
-Traffic proportion is expressed by two relative prime numbers n and m, where m packets form every n packets belong to the foreground traffic and the rest (n-m) packets belong to the background traffi.
+__n__ and __m__: they are two relative prime numbers for specifying the proportion of foreground and background traffic: m packets form every n packets belong to the foreground traffic and the rest (n-m) packets belong to the background traffic.
 
-Besides the parameters above, which are common for all tester programs, siitperf-lat uses two further ones:
+Besides the parameters above, which are common for all three tester programs, siitperf-lat uses two further ones:
 
 __delay__: delay before the first frame with timestamp is sent (in seconds, 0-3600)
 
@@ -115,7 +124,7 @@ And siitperf-pdv uses the following one:
 
 __frame timeout__: frame timeout (in milliseconds). If the value of this parameter is 0, then proper PDV measurement is done. If the value of this parameter is higher than zero, then no PDV measurement is done, rather a special throughput (or frame loss rate) measurement is performed, where the tester checks this timeout for each frame individually: if the measured delay of a frame is longer than the timeout, then the frame is reclassified as lost. 
 
-We note that the specified frames size always interpreted as IPv6 frame sizes, even if pure IPv4 measurements are done (both sides are configured as IPv4 and there is no backround traffic), and in this case the allowed range is 84-1538, to be able to use 84-1518 bytes long IPv4 frames.
+We note that the specified frames size always interpreted as IPv6 frame size, even if pure IPv4 measurements are done (both sides are configured as IPv4 and there is no backround traffic), and in this case the allowed range is 84-1538, to be able to use 64-1518 bytes long IPv4 frames.
 
 The execution of the measurements are supported by the following scripts:
 
@@ -141,11 +150,11 @@ As for time measurements, siitperf relies on the rte_rdtsc() DPDK function, whic
 
 Although siitperf is likely to run on most Linux disributions, we have tested it under Debian 9.9 only, and our DPDK version was: 16.11.9-1+deb9u1.
 
-Siitperf uses a separate core for sending and receiving in each directions, thus it requirest 4 CPU cores for bidirectional traffic besides the main core used for executing the main program. The 4 cores should be reserved at boot time to avoid interference with other programs. We used the following line in "/etc/default/grub":
+Siitperf uses a separate core for sending and receiving in each directions, thus it requires 4 CPU cores for bidirectional traffic besides the main core used for executing the main program. The 4 cores should be reserved at boot time to avoid interference with other programs. We used the following line in "/etc/default/grub":
 
 	GRUB_CMDLINE_LINUX_DEFAULT="quiet isolcpus=2,4,6,8 hugepagesz=1G hugepages=32"
 
-As it can be also seen, we used 1GB hugepages. If your CPU does not have the "pdpe1gb" flag, but it has the "pse" flag then, 2M hugepages will still do. (We have also sortly tested it.) Our relevant setting for 1GB hugepages in the "/etc/fstab" file was:
+As it can be also seen, we used 1GB hugepages. If your CPU does not have the "pdpe1gb" flag, but it has the "pse" flag, then 2MB hugepages will still do. (We have also sortly tested it.) Our relevant setting for 1GB hugepages in the "/etc/fstab" file was:
 
 	nodev   /mnt/huge_1GB hugetlbfs pagesize=1GB 0 0
 
