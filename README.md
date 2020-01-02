@@ -158,5 +158,14 @@ As it can be also seen, we used 1GB hugepages. If your CPU does not have the "pd
 
 	nodev   /mnt/huge_1GB hugetlbfs pagesize=1GB 0 0
 
+Further Information
+-------------------
 
+For further information on the design, implementation and initial peformance estimation of siitperf, please read our paper:
+G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateless NAT64 Gateways", under review in _IEICE Transactions on Communications_, review version is available: http://www.hit.bme.hu/~lencse/publications/IEICE-2019-siitperf-for-review.pdf (may be updated or removed)
 
+Any feedbacks (including questions, feature requests, comments, suggestions, etc.) are welcomed by the author.
+
+Gabor LENCSE
+
+e-mail: lencse-at-hit-dot-bme-dot-hu. s/-at-/@/, s/-dot-/./g
