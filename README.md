@@ -1,7 +1,7 @@
 siitperf
 ========
 
-Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK, and it can be used under the Linux operating system.
+Siitperf is an RFC 8219 compliant SIIT (stateless NAT64) tester written in C++ using DPDK, and it can be used under the Linux operating system.
 
 Introduction
 ------------
