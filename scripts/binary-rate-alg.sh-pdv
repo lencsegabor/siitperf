@@ -31,7 +31,7 @@ echo "Measurement Error: $e"  >> ratetest.log
 echo "Sleep Time (sec): $sleept" >> ratetest.log
 date +'Date&Time: %Y-%m-%d %H:%M:%S.%N' >> ratetest.log
 echo "#############################" >> ratetest.log
-echo "No, Size, Dir, n, m, Duration, Initial Rate, Timeout, LatR, Error, Date, Iterations needed, rate" > rate.csv
+echo "No, Size, Dir, n, m, Duration, Initial Rate, Timeout, Error, Date, Iterations needed, rate" > rate.csv
 
 # Execute $no_exp number of experiments
 for (( N=1; N <= $no_exp; N++ ))
