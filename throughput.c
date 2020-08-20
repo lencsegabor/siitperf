@@ -1,5 +1,7 @@
 /* Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK
- *
+ * Variable port feature is also added to comply with RFC 4814,
+ * for more information: https://tools.ietf.org/html/rfc4814#section-4.5
+ * 
  *  Copyright (C) 2019-2020 Gabor Lencse
  *
  *  This file is part of siitperf.
