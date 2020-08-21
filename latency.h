@@ -1,6 +1,8 @@
 /* Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK
+ * Variable port feature is also added to comply with RFC 4814,
+ * for more information: https://tools.ietf.org/html/rfc4814#section-4.5
  *
- *  Copyright (C) 2019 Gabor Lencse
+ *  Copyright (C) 2019-2020 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -29,7 +31,7 @@ public:
 
   Latency() : Throughput() { }; // default constructor
   int readCmdLine(int argc, const char *argv[]);	// reads further two arguments
-  virtual int senderPoolSize(int numDestNets);		// adds num_timestamps, too
+  virtual int senderPoolSize(int numDestNets, int varport);	// adds num_timestamps, too
 
   // perform latency measurement
   void measure(uint16_t leftport, uint16_t rightport);
@@ -38,11 +40,11 @@ public:
 // functions to create Latency Frames (and their parts)
 struct rte_mbuf *mkLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                                 const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                                const uint32_t *src_ip, const uint32_t *dst_ip, uint16_t id);
+                                const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport, uint16_t id);
 void mkDataLatency(uint8_t *data, uint16_t length, uint16_t latency_frame_id);
 struct rte_mbuf *mkLatencyFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                                 const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                                const struct in6_addr *src_ip, const struct in6_addr *dst_ip, uint16_t id);
+                                const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport, uint16_t id);
 
 class senderCommonParametersLatency : public senderCommonParameters {
 public:
@@ -60,7 +62,8 @@ public:
   senderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                           struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                           struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
-                          uint16_t num_dest_nets_, uint64_t *send_ts_);
+                   	  uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
+                          uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_, uint64_t *send_ts_);
 };
 
 class receiverParametersLatency : public receiverParameters {
