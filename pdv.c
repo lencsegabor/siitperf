@@ -1,4 +1,6 @@
 /* Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK
+ * Variable port feature is also added to comply with RFC 4814,
+ * for more information: https://tools.ietf.org/html/rfc4814#section-4.5
  *
  *  Copyright (C) 2019 Gabor Lencse
  *
@@ -37,14 +39,15 @@ int Pdv::readCmdLine(int argc, const char *argv[]) {
   return 0;
 }
 
-int Pdv::senderPoolSize(int num_dest_nets) {
-  return Throughput::senderPoolSize(num_dest_nets)*N; // all frames exit is N copies
+int Pdv::senderPoolSize(int num_dest_nets, int varport) {
+  return 2*num_dest_nets*N + PORT_TX_QUEUE_SIZE + 100; // 2*: fg. and bg. Test Frames
+  // everything exists in N copies, see the definition of N
 }
 
 // creates a special IPv4 Test Frame for PDV measurement using several helper functions
 struct rte_mbuf *mkPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const uint32_t *src_ip, const uint32_t *dst_ip) {
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the PDV Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the PDV Frame! \n", side);
@@ -60,18 +63,18 @@ struct rte_mbuf *mkPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char 
   int ip_length = length - sizeof(ether_hdr);
   mkIpv4Header(ip_hdr, ip_length, src_ip, dst_ip);      // Does not set IPv4 header checksum
   int udp_length = ip_length - sizeof(ipv4_hdr);        // No IP Options are used
-  mkUdpHeader(udp_hd, udp_length);
+  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);
   int data_legth = udp_length - sizeof(udp_hdr);
   mkDataPdv(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
-  ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);
+  ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);        // IPv4 header checksum is set now
   return pkt_mbuf;
 }
 
 // creates a special IPv6 Test Frame for PDV measurement using several helper functions
 struct rte_mbuf *mkPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip) {
+                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the PDV Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the PDV Frame! \n", side);
@@ -87,7 +90,7 @@ struct rte_mbuf *mkPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char 
   int ip_length = length - sizeof(ether_hdr);
   mkIpv6Header(ip_hdr, ip_length, src_ip, dst_ip);
   int udp_length = ip_length - sizeof(ipv6_hdr); // No IP Options are used
-  mkUdpHeader(udp_hd, udp_length);
+  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);
   int data_legth = udp_length - sizeof(udp_hdr);
   mkDataPdv(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
@@ -96,7 +99,7 @@ struct rte_mbuf *mkPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char 
 
 void mkDataPdv(uint8_t *data, uint16_t length) {
   unsigned i;
-  uint8_t identify[8]= { 'I', 'D', 'E', 'N', 'T', 'I', 'F', 'Y' };      // Identificion of the Latency Frames
+  uint8_t identify[8]= { 'I', 'D', 'E', 'N', 'T', 'I', 'F', 'Y' };      // Identification of the PDV Test Frames
   uint64_t *id=(uint64_t *) identify;
   *(uint64_t *)data = *id;
   data += 8;
@@ -137,6 +140,13 @@ int sendPdv(void *par) {
   struct in6_addr *dst_ipv6 = p->dst_ipv6;
   struct in6_addr *src_bg= p->src_bg;
   struct in6_addr *dst_bg = p->dst_bg;
+  unsigned var_sport = p->var_sport;
+  unsigned var_dport = p->var_dport;
+  unsigned varport = var_sport || var_dport; // derived logical value: at least one port has to be changed?
+  uint16_t sport_min = p->sport_min;
+  uint16_t sport_max = p->sport_max;
+  uint16_t dport_min = p->dport_min;
+  uint16_t dport_max = p->dport_max;
   uint64_t **send_ts = p->send_ts;
 
   uint64_t frames_to_send = duration * frame_rate;      // Each active sender sends this number of packets
@@ -149,159 +159,458 @@ int sendPdv(void *par) {
       rte_exit(EXIT_FAILURE, "Error: Receiver can't allocate memory for timestamps!\n");
   *send_ts = snd_ts; // return the address of the array to the caller function
 
-  if ( num_dest_nets== 1 ) {
-    // optimized code for single flow: always the same foreground or background frame is sent, but it is updated regarding counter and UDP checksum
-    // N size arrays are used to resolve the write after send problem
-    int i; // cycle variable for the above mentioned purpose: takes {0..N-1} values
-    struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N]; // pointers of message buffers for fg. and bg. PDV Frames
-    uint8_t *fg_pkt[N], *bg_pkt[N]; // pointers to the frames (in the message buffers)
-    uint8_t *fg_udp_chksum[N], *bg_udp_chksum[N], *fg_counter[N], *bg_counter[N]; 	// pointers to the given fields
-    uint16_t fg_udp_chksum_start, bg_udp_chksum_start; 	// starting values (uncomplemented checksums taken from the original frames)
-    uint32_t chksum; // temporary variable for shecksum calculation
-
-    // create PDV Test Frames 
-    for ( i=0; i<N; i++ ) {
-      // create foreground PDV Frame (IPv4 or IPv6)
-      if ( ip_version == 4 ) {
-        fg_pkt_mbuf[i] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4);
-        fg_pkt[i] = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
-        fg_udp_chksum[i] = fg_pkt[i] + 40;
-        fg_counter[i] = fg_pkt[i] + 50;
-      } else { // IPv6
-        fg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6);
-        fg_pkt[i] = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
-        fg_udp_chksum[i] = fg_pkt[i] + 60;
-        fg_counter[i] = fg_pkt[i] + 70;
+  if ( !varport ) {
+    // optimized code for using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4
+    if ( num_dest_nets== 1 ) {
+      // optimized code for single destination network: always the same foreground or background frame is sent, 
+      // but it is updated regarding counter and UDP checksum
+      // N size arrays are used to resolve the write after send problem
+      int i; // cycle variable for the above mentioned purpose: takes {0..N-1} values
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N]; // pointers of message buffers for fg. and bg. PDV Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_chksum[N], *bg_udp_chksum[N], *fg_counter[N], *bg_counter[N]; 	// pointers to the given fields
+      uint16_t fg_udp_chksum_start, bg_udp_chksum_start; 	// starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+  
+      // create PDV Test Frames 
+      for ( i=0; i<N; i++ ) {
+        // create foreground PDV Frame (IPv4 or IPv6)
+        if ( ip_version == 4 ) {
+          fg_pkt_mbuf[i] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, 0, 0);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
+          fg_udp_chksum[i] = pkt + 40;
+          fg_counter[i] = pkt + 50;
+        } else { // IPv6
+          fg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
+          fg_udp_chksum[i] = pkt + 60;
+          fg_counter[i] = pkt + 70;
+        }
+        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        // create backround PDV Frame (always IPv6)
+        bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
+        pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
+        bg_udp_chksum[i] = pkt + 60;
+        bg_counter[i] = pkt + 70;
+        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       }
-      fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
-      // create backround PDV Frame (always IPv6)
-      bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg);
-      bg_pkt[i] = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
-      bg_udp_chksum[i] = fg_pkt[i] + 60;
-      bg_counter[i] = bg_pkt[i] + 70;
-      bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
-    }
+  
+      // naive sender version: it is simple and fast
+      i=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ) {	// Main cycle for the number of frames to send
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          *(uint64_t *)fg_counter[i] = sent_frames;			// set the counter in the frame 
+          chksum = fg_udp_chksum_start + rte_raw_cksum(&sent_frames,8); 	// add the checksum of the counter to the initial checksum value
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);	// calculate 16-bit one's complement sum
+          chksum = (~chksum) & 0xffff;					// make one's complement
+          if (chksum == 0)						// checksum should not be 0 (0 means, no checksum is used)
+             chksum = 0xffff;
+          *(uint16_t *)fg_udp_chksum[i] = (uint16_t) chksum;		// set checksum in the frame
+          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
+          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[i], 1) ); 	// send foreground frame
+          snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
+        } else {
+          // background frame is to be sent
+          *(uint64_t *)bg_counter[i] = sent_frames;			// set the counter in the frame 
+          chksum = bg_udp_chksum_start + rte_raw_cksum(&sent_frames,8);   // add the checksum of the counter to the initial checksum value
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+          chksum = (~chksum) & 0xffff;                                    // make one's complement
+          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+             chksum = 0xffff;
+          *(uint16_t *)bg_udp_chksum[i] = (uint16_t) chksum;              // set checksum in the frame
+          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
+          while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[i], 1) ); 	// send background frame
+          snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
+        }
+        i = (i+1) % N;
+      } // this is the end of the sending cycle
+    } // end of optimized code for single destination network
+    else {
+      // optimized code for multiple destination networks: foreground and background frames are generated for each network and pointers are stored in arrays
+      // before sending, the frames are updated regarding counter and UDP checksum
+      // N size arrays are used to resolve the write after send problem
+      int j; // cycle variable for the above mentioned purpose: takes {0..N-1} values
+      // num_dest_nets <= 256
+      struct rte_mbuf *fg_pkt_mbuf[256][N], *bg_pkt_mbuf[256][N]; // pointers of message buffers for fg. and bg. PDV Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_chksum[256][N], *bg_udp_chksum[256][N], *fg_counter[256][N], *bg_counter[256][N];   // pointers to the given fields
+      uint16_t fg_udp_chksum_start[256], bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint32_t curr_dst_ipv4;     // IPv4 destination address, which will be changed
+      in6_addr curr_dst_ipv6;     // foreground IPv6 destination address, which will be changed
+      in6_addr curr_dst_bg;       // backround IPv6 destination address, which will be changed
+      int i;                      // cycle variable for grenerating different destination network addresses
+      if ( ip_version == 4 )
+        curr_dst_ipv4 = *dst_ipv4;
+      else // IPv6
+        curr_dst_ipv6 = *dst_ipv6;
+      curr_dst_bg = *dst_bg;
+  
+      // create PDV Test Frames
+      for ( j=0; j<N; j++ ) {
+        // create foreground PDV Frame (IPv4 or IPv6)
+        for ( i=0; i<num_dest_nets; i++ ) {
+          if ( ip_version == 4 ) {
+            ((uint8_t *)&curr_dst_ipv4)[2] = (uint8_t) i; // bits 16 to 23 of the IPv4 address are rewritten, like in 198.18.x.2
+            fg_pkt_mbuf[i][j] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, &curr_dst_ipv4, 0, 0);
+            pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
+            fg_udp_chksum[i][j] = pkt + 40;
+            fg_counter[i][j] = pkt + 50;
+          }
+          else { // IPv6
+            ((uint8_t *)&curr_dst_ipv6)[7] = (uint8_t) i; // bits 56 to 63 of the IPv6 address are rewritten, like in 2001:2:0:00xx::1
+            fg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, &curr_dst_ipv6, 0, 0);
+            pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
+            fg_udp_chksum[i][j] = pkt + 60;
+            fg_counter[i][j] = pkt + 70;
+          }
+          fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          // create backround Test Frame (always IPv6)
+          ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
+          bg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, 0, 0);
+          pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
+          bg_udp_chksum[i][j] = pkt + 60;
+          bg_counter[i][j] = pkt + 70;
+          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+        }
+      }
+  
+      // random number infrastructure is taken from: https://en.cppreference.com/w/cpp/numeric/random/uniform_int_distribution
+      // MT64 is used because of https://medium.com/@odarbelaeze/how-competitive-are-c-standard-random-number-generators-f3de98d973f0
+      // thread_local is used on the basis of https://stackoverflow.com/questions/40655814/is-mersenne-twister-thread-safe-for-cpp
+      thread_local std::random_device rd;  //Will be used to obtain a seed for the random number engine
+      thread_local std::mt19937_64 gen(rd()); //Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis(0, num_dest_nets-1);     // uniform distribution in [0, num_dest_nets-1]
+  
+      // naive sender version: it is simple and fast
+      j=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ 	// Main cycle for the number of frames to send
+        int index = uni_dis(gen); // index of the pre-generated frame 
+        if ( sent_frames % n  < m ) {
+          *(uint64_t *)fg_counter[index][j] = sent_frames;                        // set the counter in the frame
+          chksum = fg_udp_chksum_start[index] + rte_raw_cksum(&sent_frames,8);   	// add the checksum of the counter to the initial checksum value
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     	// calculate 16-bit one's complement sum
+          chksum = (~chksum) & 0xffff;                                    	// make one's complement
+          if (chksum == 0)                                                	// checksum should not be 0 (0 means, no checksum is used)
+             chksum = 0xffff;
+          *(uint16_t *)fg_udp_chksum[index][j] = (uint16_t) chksum;               // set checksum in the frame
+          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    	// Beware: an "empty" loop, as well as in the next line
+          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[index][j], 1) );      // send foreground frame
+          snd_ts[sent_frames] = rte_rdtsc();                              	// store timestamp
+        } else {
+          *(uint64_t *)bg_counter[index][j] = sent_frames;                        // set the counter in the frame
+          chksum = bg_udp_chksum_start[index] + rte_raw_cksum(&sent_frames,8);   	// add the checksum of the counter to the initial checksum value
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     	// calculate 16-bit one's complement sum
+          chksum = (~chksum) & 0xffff;                                    	// make one's complement
+          if (chksum == 0)                                                	// checksum should not be 0 (0 means, no checksum is used)
+             chksum = 0xffff;
+          *(uint16_t *)bg_udp_chksum[index][j] = (uint16_t) chksum;               // set checksum in the frame
+          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    	// Beware: an "empty" loop, as well as in the next line
+          while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[index][j], 1) );      // send foreground frame
+          snd_ts[sent_frames] = rte_rdtsc();                              	// store timestamp
+        }
+        j = (j+1) % N;
+      } // this is the end of the sending cycle
+    } // end of optimized code for multiple destination networks
+  } // end of optimized code for fixed port numbers
+  else {
+    // implementation of varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
+    // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
+    if ( num_dest_nets== 1 ) {
+      // optimized code for single destination network: always the same foreground or background frame is sent, 
+      // but it is updated regarding counter, source and/or destination port number(s) and UDP checksum
+      // N size arrays are used to resolve the write after send problem
+      int i; // cycle variable for the above mentioned purpose: takes {0..N-1} values
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N], *pkt_mbuf; // pointers of message buffers for fg. and bg. PDV Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N], *fg_counter[N]; // pointers to the given fields
+      uint8_t *bg_udp_sport[N], *bg_udp_dport[N], *bg_udp_chksum[N], *bg_counter[N]; // pointers to the given fields
+      uint16_t *udp_sport, *udp_dport, *udp_chksum; // working pointers to the given fields
+      uint64_t *counter; // working pointer to the counter in the currently manipulated frame
+      uint16_t fg_udp_chksum_start, bg_udp_chksum_start;  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done
+      uint16_t sp, dp; // values of source and destination port numbers -- temporary values
 
-    // naive sender version: it is simple and fast
-    i=0; // increase maunally after each sending
-    for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ) {	// Main cycle for the number of frames to send
-      if ( sent_frames % n  < m ) {
-        // foreground frame is to be sent
-        *(uint64_t *)fg_counter[i] = sent_frames;			// set the counter in the frame 
-        chksum = fg_udp_chksum_start + rte_raw_cksum(&sent_frames,8); 	// add the checksum of the counter to the initial checksum value
-        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);	// calculate 16-bit one's complement sum
-        chksum = (~chksum) & 0xffff;					// make one's complement
-        if (chksum == 0)						// checksum should not be 0 (0 means, no checksum is used)
-           chksum = 0xffff;
-        *(uint16_t *)fg_udp_chksum[i] = (uint16_t) chksum;		// set checksum in the frame
-        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
-        while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[i], 1) ); 	// send foreground frame
-        snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
-      } else {
-        // background frame is to be sent
-        *(uint64_t *)bg_counter[i] = sent_frames;			// set the counter in the frame 
-        chksum = bg_udp_chksum_start + rte_raw_cksum(&sent_frames,8);   // add the checksum of the counter to the initial checksum value
+      // create PDV Test Frames 
+      for ( i=0; i<N; i++ ) {
+        // create foreground PDV Frame (IPv4 or IPv6)
+        if ( ip_version == 4 ) {
+          fg_pkt_mbuf[i] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, 0, 0);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
+          fg_udp_sport[i] = pkt + 34;
+          fg_udp_dport[i] = pkt + 36;
+          fg_udp_chksum[i] = pkt + 40;
+          fg_counter[i] = pkt + 50;
+        } else { // IPv6
+          fg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
+          fg_udp_sport[i] = pkt + 54;
+          fg_udp_dport[i] = pkt + 56;
+          fg_udp_chksum[i] = pkt + 60;
+          fg_counter[i] = pkt + 70;
+        }
+        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        // create backround PDV Frame (always IPv6)
+        bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
+        pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
+        bg_udp_sport[i] = pkt + 54;
+        bg_udp_dport[i] = pkt  + 56;
+        bg_udp_chksum[i] = pkt + 60;
+        bg_counter[i] = pkt + 70;
+        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+      }
+ 
+      // set the starting values of port numbers, if they are increased or decreased
+      if ( var_sport == 1 )
+        sport = sport_min;
+      if ( var_sport == 2 )
+        sport = sport_max;
+      if ( var_dport == 1 )
+        dport = dport_min;
+      if ( var_dport == 2 )
+        dport = dport_max;
+
+      // prepare random number infrastructure
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engines
+      thread_local std::mt19937_64 gen_sport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_dport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_sport(sport_min, sport_max);   // uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<int> uni_dis_dport(dport_min, dport_max);   // uniform distribution in [sport_min, sport_max]
+ 
+      // naive sender version: it is simple and fast
+      i=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ) {	// Main cycle for the number of frames to send
+        // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          chksum = fg_udp_chksum_start;
+          udp_sport = (uint16_t *)fg_udp_sport[i];
+          udp_dport = (uint16_t *)fg_udp_dport[i];
+          udp_chksum = (uint16_t *)fg_udp_chksum[i];
+          counter = (uint64_t *)fg_counter[i];
+          pkt_mbuf = fg_pkt_mbuf[i];
+        } else {
+          // background frame is to be sent
+          chksum = bg_udp_chksum_start;
+          udp_sport = (uint16_t *)bg_udp_sport[i];
+          udp_dport = (uint16_t *)bg_udp_dport[i];
+          udp_chksum = (uint16_t *)bg_udp_chksum[i];
+          counter = (uint64_t *)bg_counter[i];
+          pkt_mbuf = bg_pkt_mbuf[i];
+        }
+        // from here, we need to handle the frame identified by the temprary variables
+        if ( var_sport ) {
+          // sport is varying
+          switch ( var_sport ) {
+            case 1:                     // increasing port numbers
+              sp = sport++;
+              if ( sport == sport_max )
+                sport = sport_min;
+              break;
+            case 2:                     // decreasing port numbers
+              sp = sport--;
+              if ( sport == sport_min )
+                sport = sport_max;
+              break;
+            case 3:                     // pseudorandom port numbers
+              sp = uni_dis_sport(gen_sport);
+          }
+          *udp_sport = htons(sp);       // set source port
+          chksum += sp;                 // add to checksum
+        }
+        if ( var_dport ) {
+          // dport is varying
+          switch ( var_dport ) {
+            case 1:                     // increasing port numbers
+              dp = dport++;
+              if ( dport == dport_max )
+                dport = dport_min;
+              break;
+            case 2:                     // decreasing port numbers
+              dp = dport--;
+              if ( dport == dport_min )
+                dport = dport_max;
+              break;
+            case 3:                     // pseudorandom port numbers
+              dp = uni_dis_dport(gen_dport);
+          }
+          *udp_dport = htons(dp);       // set destination port
+          chksum += dp;                 // add to checksum
+        }
+	*counter = sent_frames;         // set the counter in the frame
+	chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
         chksum = (~chksum) & 0xffff;                                    // make one's complement
         if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-           chksum = 0xffff;
-        *(uint16_t *)bg_udp_chksum[i] = (uint16_t) chksum;              // set checksum in the frame
-        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
-        while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[i], 1) ); 	// send background frame
-        snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
-      }
-      i = (i+1) % N;
-    } // this is the end of the sending cycle
-  } // end of optimized code for single flow
-  else {
-    // optimized code for multiple flows: foreground and background frames are generated for each flow and pointers are stored in arrays
-    // before sending, the frames are updated regarding counter and UDP checksum
-    // N size arrays are used to resolve the write after send problem
-    int j; // cycle variable for the above mentioned purpose: takes {0..N-1} values
-    // num_dest_nets <= 256
-    struct rte_mbuf *fg_pkt_mbuf[256][N], *bg_pkt_mbuf[256][N]; // pointers of message buffers for fg. and bg. PDV Frames
-    uint8_t *fg_pkt[256][N], *bg_pkt[256][N]; // pointers to the frames (in the message buffers)
-    uint8_t *fg_udp_chksum[256][N], *bg_udp_chksum[256][N], *fg_counter[256][N], *bg_counter[256][N];   // pointers to the given fields
-    uint16_t fg_udp_chksum_start[256], bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
-    uint32_t chksum; // temporary variable for shecksum calculation
-    uint32_t curr_dst_ipv4;     // IPv4 destination address, which will be changed
-    in6_addr curr_dst_ipv6;     // foreground IPv6 destination address, which will be changed
-    in6_addr curr_dst_bg;       // backround IPv6 destination address, which will be changed
-    int i;                      // cycle variable for grenerating different destination network addresses
-    if ( ip_version == 4 )
-      curr_dst_ipv4 = *dst_ipv4;
-    else // IPv6
-      curr_dst_ipv6 = *dst_ipv6;
-    curr_dst_bg = *dst_bg;
-
-    // create PDV Test Frames
-    for ( j=0; j<N; j++ ) {
-      // create foreground PDV Frame (IPv4 or IPv6)
-      for ( i=0; i<num_dest_nets; i++ ) {
-        if ( ip_version == 4 ) {
-          ((uint8_t *)&curr_dst_ipv4)[2] = (uint8_t) i; // bits 16 to 23 of the IPv4 address are rewritten, like in 198.18.x.2
-          fg_pkt_mbuf[i][j] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, &curr_dst_ipv4);
-          fg_pkt[i][j] = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
-          fg_udp_chksum[i][j] = fg_pkt[i][j] + 40;
-          fg_counter[i][j] = fg_pkt[i][j] + 50;
+          chksum = 0xffff;
+        *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+        // finally, when its time is here, send the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    // Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );           // send out the frame
+        snd_ts[sent_frames] = rte_rdtsc();                              // store timestamp
+        i = (i+1) % N;
+      } // this is the end of the sending cycle
+    } // end of optimized code for single destination network
+    else {
+      // optimized code for multiple destination networks: foreground and background frames are generated for each network and pointers are stored in arrays
+      // before sending, the frames are updated regarding counter, source and/or destination port number(s) and UDP checksum
+      // N size arrays are used to resolve the write after send problem
+      int j; // cycle variable for the above mentioned purpose: takes {0..N-1} values
+      // num_dest_nets <= 256
+      struct rte_mbuf *fg_pkt_mbuf[256][N], *bg_pkt_mbuf[256][N], *pkt_mbuf; // pointers of message buffers for fg. and bg. PDV Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_sport[256][N], *fg_udp_dport[256][N], *fg_udp_chksum[256][N], *fg_counter[256][N]; // pointers to the given fields
+      uint8_t *bg_udp_sport[256][N], *bg_udp_dport[256][N], *bg_udp_chksum[256][N], *bg_counter[256][N]; // pointers to the given fields
+      uint16_t *udp_sport, *udp_dport, *udp_chksum; // working pointers to the given fields
+      uint64_t *counter; // working pointer to the counter in the currently manipulated frame
+      uint16_t fg_udp_chksum_start[256], bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done
+      uint16_t sp, dp; // values of source and destination port numbers -- temporary values
+      uint32_t curr_dst_ipv4;     // IPv4 destination address, which will be changed
+      in6_addr curr_dst_ipv6;     // foreground IPv6 destination address, which will be changed
+      in6_addr curr_dst_bg;       // backround IPv6 destination address, which will be changed
+      int i;                      // cycle variable for grenerating different destination network addresses
+      if ( ip_version == 4 )
+        curr_dst_ipv4 = *dst_ipv4;
+      else // IPv6
+        curr_dst_ipv6 = *dst_ipv6;
+      curr_dst_bg = *dst_bg;
+  
+      // create PDV Test Frames
+      for ( j=0; j<N; j++ ) {
+        // create foreground PDV Frame (IPv4 or IPv6)
+        for ( i=0; i<num_dest_nets; i++ ) {
+          if ( ip_version == 4 ) {
+            ((uint8_t *)&curr_dst_ipv4)[2] = (uint8_t) i; // bits 16 to 23 of the IPv4 address are rewritten, like in 198.18.x.2
+            fg_pkt_mbuf[i][j] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, &curr_dst_ipv4, var_sport, var_dport);
+            pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
+            fg_udp_sport[i][j] = pkt + 34;
+            fg_udp_dport[i][j] = pkt + 36;
+            fg_udp_chksum[i][j] = pkt + 40;
+            fg_counter[i][j] = pkt + 50;
+          }
+          else { // IPv6
+            ((uint8_t *)&curr_dst_ipv6)[7] = (uint8_t) i; // bits 56 to 63 of the IPv6 address are rewritten, like in 2001:2:0:00xx::1
+            fg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, &curr_dst_ipv6, var_sport, var_dport);
+            pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
+            fg_udp_sport[i][j] = pkt + 54;
+            fg_udp_dport[i][j] = pkt + 56;
+            fg_udp_chksum[i][j] = pkt + 60;
+            fg_counter[i][j] = pkt + 70;
+          }
+          fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          // create backround Test Frame (always IPv6)
+          ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
+          bg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
+          bg_udp_sport[i][j] = pkt + 54;
+          bg_udp_dport[i][j] = pkt  + 56;
+          bg_udp_chksum[i][j] = pkt + 60;
+          bg_counter[i][j] = pkt + 70;
+          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
         }
-        else { // IPv6
-          ((uint8_t *)&curr_dst_ipv6)[7] = (uint8_t) i; // bits 56 to 63 of the IPv6 address are rewritten, like in 2001:2:0:00xx::1
-          fg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, &curr_dst_ipv6);
-          fg_pkt[i][j] = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
-          fg_udp_chksum[i][j] = fg_pkt[i][j] + 60;
-          fg_counter[i][j] = fg_pkt[i][j] + 70;
+      }
+ 
+      // set the starting values of port numbers, if they are increased or decreased
+      if ( var_sport == 1 )
+        sport = sport_min;
+      if ( var_sport == 2 )
+        sport = sport_max;
+      if ( var_dport == 1 )
+        dport = dport_min;
+      if ( var_dport == 2 )
+        dport = dport_max;
+
+      // random number infrastructure is taken from: https://en.cppreference.com/w/cpp/numeric/random/uniform_int_distribution
+      // MT64 is used because of https://medium.com/@odarbelaeze/how-competitive-are-c-standard-random-number-generators-f3de98d973f0
+      // thread_local is used on the basis of https://stackoverflow.com/questions/40655814/is-mersenne-twister-thread-safe-for-cpp
+      thread_local std::random_device rd;  //Will be used to obtain a seed for the random number engine
+      thread_local std::mt19937_64 gen_net(rd()); //Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_sport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_dport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_net(0, num_dest_nets-1);     // uniform distribution in [0, num_dest_nets-1]
+      std::uniform_int_distribution<int> uni_dis_sport(sport_min, sport_max);   // uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<int> uni_dis_dport(dport_min, dport_max);   // uniform distribution in [sport_min, sport_max]
+  
+      // naive sender version: it is simple and fast
+      j=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ 	// Main cycle for the number of frames to send
+        int index = uni_dis_net(gen_net); // index of the pre-generated frame 
+        // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          chksum = fg_udp_chksum_start[index];
+          udp_sport = (uint16_t *)fg_udp_sport[index][j];
+          udp_dport = (uint16_t *)fg_udp_dport[index][j];
+          udp_chksum = (uint16_t *)fg_udp_chksum[index][j];
+          counter = (uint64_t *)fg_counter[index][j];
+          pkt_mbuf = fg_pkt_mbuf[index][j];
+        } else {
+          // background frame is to be sent
+          chksum = bg_udp_chksum_start[index];
+          udp_sport = (uint16_t *)bg_udp_sport[index][j];
+          udp_dport = (uint16_t *)bg_udp_dport[index][j];
+          udp_chksum = (uint16_t *)bg_udp_chksum[index][j];
+          counter = (uint64_t *)bg_counter[index][j];
+          pkt_mbuf = bg_pkt_mbuf[index][j];
         }
-        fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
-        // create backround Test Frame (always IPv6)
-        ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
-        bg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg);
-        bg_pkt[i][j] = rte_pktmbuf_mtod(bg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
-        bg_udp_chksum[i][j] = bg_pkt[i][j] + 60;
-        bg_counter[i][j] = bg_pkt[i][j] + 70;
-        bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
-      }
-    }
-
-    // random number infrastructure is taken from: https://en.cppreference.com/w/cpp/numeric/random/uniform_int_distribution
-    // MT64 is used because of https://medium.com/@odarbelaeze/how-competitive-are-c-standard-random-number-generators-f3de98d973f0
-    // thread_local is used on the basis of https://stackoverflow.com/questions/40655814/is-mersenne-twister-thread-safe-for-cpp
-    thread_local std::random_device rd;  //Will be used to obtain a seed for the random number engine
-    thread_local std::mt19937_64 gen(rd()); //Standard 64-bit mersenne_twister_engine seeded with rd()
-    std::uniform_int_distribution<int> uni_dis(0, num_dest_nets-1);     // uniform distribution in [0, num_dest_nets-1]
-
-    // naive sender version: it is simple and fast
-    j=0; // increase maunally after each sending
-    for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ 	// Main cycle for the number of frames to send
-      int index = uni_dis(gen); // index of the pre-generated frame 
-      if ( sent_frames % n  < m ) {
-        *(uint64_t *)fg_counter[index][j] = sent_frames;                        // set the counter in the frame
-        chksum = fg_udp_chksum_start[index] + rte_raw_cksum(&sent_frames,8);   	// add the checksum of the counter to the initial checksum value
-        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     	// calculate 16-bit one's complement sum
-        chksum = (~chksum) & 0xffff;                                    	// make one's complement
-        if (chksum == 0)                                                	// checksum should not be 0 (0 means, no checksum is used)
-           chksum = 0xffff;
-        *(uint16_t *)fg_udp_chksum[index][j] = (uint16_t) chksum;               // set checksum in the frame
-        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    	// Beware: an "empty" loop, as well as in the next line
-        while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[index][j], 1) );      // send foreground frame
-        snd_ts[sent_frames] = rte_rdtsc();                              	// store timestamp
-      } else {
-        *(uint64_t *)bg_counter[index][j] = sent_frames;                        // set the counter in the frame
-        chksum = bg_udp_chksum_start[index] + rte_raw_cksum(&sent_frames,8);   	// add the checksum of the counter to the initial checksum value
-        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     	// calculate 16-bit one's complement sum
-        chksum = (~chksum) & 0xffff;                                    	// make one's complement
-        if (chksum == 0)                                                	// checksum should not be 0 (0 means, no checksum is used)
-           chksum = 0xffff;
-        *(uint16_t *)bg_udp_chksum[index][j] = (uint16_t) chksum;               // set checksum in the frame
-        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    	// Beware: an "empty" loop, as well as in the next line
-        while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[index][j], 1) );      // send foreground frame
-        snd_ts[sent_frames] = rte_rdtsc();                              	// store timestamp
-      }
-      j = (j+1) % N;
-    } // this is the end of the sending cycle
-
-  } // end of optimized code for multiple flows
-
+        // from here, we need to handle the frame identified by the temprary variables
+        if ( var_sport ) {
+          // sport is varying
+          switch ( var_sport ) {
+            case 1:                     // increasing port numbers
+              sp = sport++;
+              if ( sport == sport_max )
+                sport = sport_min;
+              break;
+            case 2:                     // decreasing port numbers
+              sp = sport--;
+              if ( sport == sport_min )
+                sport = sport_max;
+              break;
+            case 3:                     // pseudorandom port numbers
+              sp = uni_dis_sport(gen_sport);
+          }
+          *udp_sport = htons(sp);       // set source port
+          chksum += sp;                 // add to checksum
+        }
+        if ( var_dport ) {
+          // dport is varying
+          switch ( var_dport ) {
+            case 1:                     // increasing port numbers
+              dp = dport++;
+              if ( dport == dport_max )
+                dport = dport_min;
+              break;
+            case 2:                     // decreasing port numbers
+              dp = dport--;
+              if ( dport == dport_min )
+                dport = dport_max;
+              break;
+            case 3:                     // pseudorandom port numbers
+              dp = uni_dis_dport(gen_dport);
+          }
+          *udp_dport = htons(dp);       // set destination port
+          chksum += dp;                 // add to checksum
+        }
+        *counter = sent_frames;         // set the counter in the frame
+        chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = (~chksum) & 0xffff;                                    // make one's complement
+        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+        // finally, when its time is here, send the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    // Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );           // send out the frame
+        snd_ts[sent_frames] = rte_rdtsc();                            	// store timestamp
+        j = (j+1) % N;
+      } // this is the end of the sending cycle
+    } // end of optimized code for multiple destination networks
+  } // end of implementation of varying port numbers
   // Now, we check the time
   elapsed_seconds = (double)(rte_rdtsc()-start_tsc)/hz;
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
@@ -392,7 +701,8 @@ void Pdv::measure(uint16_t leftport, uint16_t rightport) {
 
     // then, initialize the parameter class instance
     senderParametersPdv spars(&scp,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                              ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,&left_send_ts);
+                              ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                              fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,&left_send_ts);
 
     // start left sender
     if ( rte_eal_remote_launch(sendPdv, &spars, cpu_left_sender) )
@@ -416,7 +726,8 @@ void Pdv::measure(uint16_t leftport, uint16_t rightport) {
 
     // then, initialize the parameter class instance
     senderParametersPdv spars(&scp,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                              ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,&right_send_ts);
+                              ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+			      fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,&right_send_ts);
 
     // start right sender
     if (rte_eal_remote_launch(sendPdv, &spars, cpu_right_sender) )
@@ -455,10 +766,12 @@ void Pdv::measure(uint16_t leftport, uint16_t rightport) {
 }
 
 senderParametersPdv::senderParametersPdv(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
-                                                  struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
-                                                  struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
-                                                  uint16_t num_dest_nets_, uint64_t **send_ts_) :
-  senderParameters(cp_,ip_version_,pkt_pool_,eth_id_,side_,dst_mac_,src_mac_,src_ipv4_,dst_ipv4_,src_ipv6_,dst_ipv6_,src_bg_,dst_bg_,num_dest_nets_) {
+                                         struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
+                                         struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
+                                         uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
+                                   	 uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,uint64_t **send_ts_) :
+  senderParameters(cp_,ip_version_,pkt_pool_,eth_id_,side_,dst_mac_,src_mac_,src_ipv4_,dst_ipv4_,src_ipv6_,dst_ipv6_,src_bg_,dst_bg_,num_dest_nets_,
+		  var_sport_,var_dport_,sport_min_,sport_max_,dport_min_,dport_max_) {
   send_ts = send_ts_;
 }
     
