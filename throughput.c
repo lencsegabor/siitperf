@@ -278,7 +278,7 @@ int Throughput::readCmdLine(int argc, const char *argv[]) {
     std::cerr << "Input Error: Too few command line arguments." << std::endl;
     return -1;
   }
-  if ( sscanf(argv[1], "%hu", &ipv6_frame_size) != 1 || ipv6_frame_size < 64 || ipv6_frame_size > 1538 ) {
+  if ( sscanf(argv[1], "%hu", &ipv6_frame_size) != 1 || ipv6_frame_size < 84 || ipv6_frame_size > 1538 ) {
     std::cerr << "Input Error: IPv6 frame size must be between 84 and 1538." << std::endl;
     return -1;
   }
