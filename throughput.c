@@ -1,6 +1,8 @@
 /* Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK
- *
- *  Copyright (C) 2019 Gabor Lencse
+ * Variable port feature is also added to comply with RFC 4814,
+ * for more information: https://tools.ietf.org/html/rfc4814#section-4.5
+ * 
+ *  Copyright (C) 2019-2020 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -27,8 +29,8 @@ char numChannels[11]; // buffer for printing the number of memory channels into 
 
 Throughput::Throughput(){
   // initialize some data members to default or invalid value
-  ip_left_version = 6;	 	// default value for NAT64
-  ip_right_version = 4; 	// default value for NAT64
+  ip_left_version = 6;	 	// default value for NAT64 benchmarking
+  ip_right_version = 4; 	// default value for NAT64 benchmarking
   forward = 1;			// default value, left to right direction is active
   reverse = 1;			// default value, right to left direction is active 
   promisc = 1;			// default value, promiscuous mode is set
@@ -37,8 +39,20 @@ Throughput::Throughput(){
   cpu_right_sender = -1; 	// MUST be set in the config file if reverse != 0
   cpu_left_receiver = -1; 	// MUST be set in the config file if reverse != 0
   memory_channels = 1; 		// default value, this value will be set, if not specified in the config file
-  num_left_nets = 1;		// default value: single flow
-  num_right_nets = 1;		// default value: single flow
+  num_left_nets = 1;		// default value: single destination network
+  num_right_nets = 1;		// default value: single destination network
+  fwd_var_sport = 0;		// default value: use hard coded fix source port of RFC 2544
+  fwd_var_dport = 0;		// default value: use hard coded fix destination port of RFC 2544
+  fwd_sport_min = 1024;		// default value: use maximum range recommended by RFC 4814
+  fwd_sport_max = 65535;	// default value: use maximum range recommended by RFC 4814
+  fwd_dport_min = 1;		// default value: use maximum range recommended by RFC 4814
+  fwd_dport_max = 49151;	// default value: use maximum range recommended by RFC 4814
+  rev_var_sport = 0;		// default value: use hard coded fix source port of RFC 2544
+  rev_var_dport = 0;		// default value: use hard coded fix destination port of RFC 2544
+  rev_sport_min = 1024;		// default value: use maximum range recommended by RFC 4814
+  rev_sport_max = 65535;	// default value: use maximum range recommended by RFC 4814
+  rev_dport_min = 1;		// default value: use maximum range recommended by RFC 4814
+  rev_dport_max = 49151;	// default value: use maximum range recommended by RFC 4814
 };
 
 // finds a 'key' (name of a parameter) in the 'line' string
@@ -235,6 +249,70 @@ int Throughput::readConfigFile(const char *filename) {
         std::cerr << "Input Error: 'MEM-Channels' must be > 0." << std::endl;
         return -1;
       }
+    } else if ( (pos = findKey(line, "Fwd-var-sport")) >= 0 ) {
+      sscanf(line+pos, "%u", &fwd_var_sport);
+      if ( fwd_var_sport > 3 ) {
+        std::cerr << "Input Error: 'Fwd-var-sport' must be 0, 1, 2, or 3." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Fwd-var-dport")) >= 0 ) {
+      sscanf(line+pos, "%u", &fwd_var_dport);
+      if ( fwd_var_dport > 3 ) {
+        std::cerr << "Input Error: 'Fwd-var-dport' must be 0, 1, 2, or 3." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Rev-var-sport")) >= 0 ) {
+      sscanf(line+pos, "%u", &rev_var_sport);
+      if ( rev_var_sport > 3 ) {
+        std::cerr << "Input Error: 'Rev-var-sport' must be 0, 1, 2, or 3." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Rev-var-dport")) >= 0 ) {
+      sscanf(line+pos, "%u", &rev_var_dport);
+      if ( rev_var_dport > 3 ) {
+        std::cerr << "Input Error: 'Rev-var-dport' must be 0, 1, 2, or 3." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Fwd-sport-min")) >= 0 ) {
+      if ( sscanf(line+pos, "%u", &fwd_sport_min) < 1 ) {
+        std::cerr << "Input Error: Unable to read 'Fwd-sport-min'." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Fwd-sport-max")) >= 0 ) {
+      if ( sscanf(line+pos, "%u", &fwd_sport_max) < 1 ) {
+        std::cerr << "Input Error: Unable to read 'Fwd-sport-max'." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Fwd-dport-min")) >= 0 ) {
+      if ( sscanf(line+pos, "%u", &fwd_dport_min) < 1 ) {
+        std::cerr << "Input Error: Unable to read 'Fwd-dport-min'." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Fwd-dport-max")) >= 0 ) {
+      if ( sscanf(line+pos, "%u", &fwd_dport_max) < 1 ) {
+        std::cerr << "Input Error: Unable to read 'Fwd-dport-max'." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Rev-sport-min")) >= 0 ) {
+      if ( sscanf(line+pos, "%u", &rev_sport_min) < 1 ) {
+        std::cerr << "Input Error: Unable to read 'Rev-sport-min'." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Rev-sport-max")) >= 0 ) {
+      if ( sscanf(line+pos, "%u", &rev_sport_max) < 1 ) {
+        std::cerr << "Input Error: Unable to read 'Rev-sport-max'." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Rev-dport-min")) >= 0 ) {
+      if ( sscanf(line+pos, "%u", &rev_dport_min) < 1 ) {
+        std::cerr << "Input Error: Unable to read 'Rev-dport-min'." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Rev-dport-max")) >= 0 ) {
+      if ( sscanf(line+pos, "%u", &rev_dport_max) < 1 ) {
+        std::cerr << "Input Error: Unable to read 'Rev-dport-max'." << std::endl;
+        return -1;
+      }
     } else if ( nonComment(line) ) { // It may be too strict!
         std::cerr << "Input Error: Cannot interpret '" << filename << "' line " << line_no << ":" << std::endl;
         std::cerr << line << std::endl;
@@ -268,6 +346,9 @@ int Throughput::readConfigFile(const char *filename) {
       return -1;
     }
   }
+  // calculate the derived values, if any port numbers has to be changed
+  fwd_varport = fwd_var_sport || fwd_var_dport;
+  rev_varport = rev_var_sport || rev_var_dport;
   return 0;
 }
 
@@ -374,9 +455,11 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
   // Sender pool size calculation uses 0 instead of num_{left,right}_nets, when no actual frame sending is needed. 
 
   // calculate packet pool sizes and then create the pools
+  int left_sender_pool_size = senderPoolSize(forward ? num_right_nets: 0, fwd_varport ? 1 : 0 );
+  int right_sender_pool_size = senderPoolSize(forward ? num_right_nets: 0, rev_varport ? 1 : 0 );
   int receiver_pool_size = PORT_RX_QUEUE_SIZE + 2 * MAX_PKT_BURST + 100; // While one of them is processed, the other one is being filled. 
 
-  pkt_pool_left_sender = rte_pktmbuf_pool_create ( "pp_left_sender", senderPoolSize(forward ? num_right_nets: 0 ), PKTPOOL_CACHE, 0, 
+  pkt_pool_left_sender = rte_pktmbuf_pool_create ( "pp_left_sender", left_sender_pool_size, PKTPOOL_CACHE, 0, 
                                                    RTE_MBUF_DEFAULT_BUF_SIZE, rte_lcore_to_socket_id(cpu_left_sender));
   if ( !pkt_pool_left_sender ) {
     std::cerr << "Error: Cannot create packet pool for Left Sender, Tester exits." << std::endl;
@@ -389,7 +472,7 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
     return -1;
   }
 
-  pkt_pool_right_sender = rte_pktmbuf_pool_create ( "pp_right_sender", senderPoolSize(reverse ? num_left_nets : 0), PKTPOOL_CACHE, 0,
+  pkt_pool_right_sender = rte_pktmbuf_pool_create ( "pp_right_sender", right_sender_pool_size, PKTPOOL_CACHE, 0,
                                                     RTE_MBUF_DEFAULT_BUF_SIZE, rte_lcore_to_socket_id(cpu_right_sender));
   if ( !pkt_pool_right_sender ) {
     std::cerr << "Error: Cannot create packet pool for Right Sender, Tester exits." << std::endl;
@@ -489,8 +572,9 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
 }
 
 // calculates sender pool size, it is a virtual member function, redefined in derived classes
-int Throughput::senderPoolSize(int num_dest_nets) {
-  return 3*num_dest_nets + PORT_TX_QUEUE_SIZE + 100; // 3*: IPv4, IPv6 fg, IPv6 bg
+int Throughput::senderPoolSize(int num_dest_nets, int varport) {
+  return 2*num_dest_nets*(varport ? N : 1) + PORT_TX_QUEUE_SIZE + 100; // 2*: fg. and bg. Test Frames
+  // if varport then everything exists in N copies, see the definition of N
 }
 
 //checks NUMA localty: is the NUMA node of network port and CPU the same?
@@ -528,7 +612,7 @@ void check_tsc(int cpu, const char *cpu_name) {
 // creates an IPv4 Test Frame using several helper functions
 struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const uint32_t *src_ip, const uint32_t *dst_ip) {
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Test Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the Test Frame! \n", side);
@@ -544,7 +628,7 @@ struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char
   int ip_length = length - sizeof(ether_hdr);
   mkIpv4Header(ip_hdr, ip_length, src_ip, dst_ip); 	// Does not set IPv4 header checksum
   int udp_length = ip_length - sizeof(ipv4_hdr); 	// No IP Options are used
-  mkUdpHeader(udp_hd, udp_length);			
+  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);			
   int data_legth = udp_length - sizeof(udp_hdr);
   mkData(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
@@ -577,9 +661,9 @@ void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, 
 }
 
 // creates and UDP header
-void mkUdpHeader(struct udp_hdr *udp, uint16_t length) {
-  udp->src_port =  htons(0xC020);
-  udp->dst_port =  htons(0x0007); // Echo
+void mkUdpHeader(struct udp_hdr *udp, uint16_t length, unsigned var_sport, unsigned var_dport) {
+  udp->src_port =  htons(var_sport ? 0 : 0xC020); // set to 0 if source port number will change, otherwise RFC 2544 Test Frame format
+  udp->dst_port =  htons(var_dport ? 0 : 0x0007); // set to 0 if destination port number will change, otherwise RFC 2544 Test Frame format
   udp->dgram_len = htons(length);
   udp->dgram_cksum = 0; // Checksum is set to 0 now.
   // UDP checksum is calculated later.
@@ -600,7 +684,7 @@ void mkData(uint8_t *data, uint16_t length) {
 // creates an IPv6 Test Frame using several helper functions
 struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip) {
+                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Test Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the Test Frame! \n", side);
@@ -616,7 +700,7 @@ struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char
   int ip_length = length - sizeof(ether_hdr);
   mkIpv6Header(ip_hdr, ip_length, src_ip, dst_ip); 
   int udp_length = ip_length - sizeof(ipv6_hdr); // No IP Options are used
-  mkUdpHeader(udp_hd, udp_length);
+  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);
   int data_legth = udp_length - sizeof(udp_hdr);
   mkData(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
@@ -633,7 +717,7 @@ void mkIpv6Header(struct ipv6_hdr *ip, uint16_t length, const struct in6_addr *s
   rte_mov16((uint8_t *)&ip->dst_addr,(uint8_t *)dst_ip);
 }
 
-// sends Test Frames for throughput (or frame loss rate) measurements
+// sends Test Frames for throughput (or frame loss rate) measurement
 int send(void *par) {
   // collecting input parameters:
   class senderParameters *p = (class senderParameters *)par;
@@ -663,80 +747,364 @@ int send(void *par) {
   struct in6_addr *dst_ipv6 = p->dst_ipv6;
   struct in6_addr *src_bg= p->src_bg;
   struct in6_addr *dst_bg = p->dst_bg;
+  unsigned var_sport = p->var_sport;
+  unsigned var_dport = p->var_dport;
+  unsigned varport = var_sport || var_dport; // derived logical value: at least one port has to be changed?
+  uint16_t sport_min = p->sport_min;
+  uint16_t sport_max = p->sport_max;
+  uint16_t dport_min = p->dport_min;
+  uint16_t dport_max = p->dport_max;
 
   // further local variables
   uint64_t frames_to_send = duration * frame_rate;	// Each active sender sends this number of frames
   uint64_t sent_frames=0; // counts the number of sent frames
   double elapsed_seconds; // for checking the elapsed seconds during sending
 
-  if ( num_dest_nets== 1 ) { 	
-    // optimized code for single flow: always the same foreground or background frame is sent, no arrays are used
-    struct rte_mbuf *fg_pkt_mbuf, *bg_pkt_mbuf; // message buffers for fg. and bg. Test Frames
-    // create foreground Test Frame
-    if ( ip_version == 4 )
-      fg_pkt_mbuf = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4);
-    else  // IPv6
-      fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6);
-
-    // create backround Test Frame (always IPv6)
-    bg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg);
-
-    // naive sender version: it is simple and fast
-    for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
-      while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); // Beware: an "empty" loop, and further two will come!
-      if ( sent_frames % n  < m )
-        while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf, 1) ); // send foreground frame
-      else
-         while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf, 1) ); // send background frame
-    } // this is the end of the sending cycle
-  } // end of optimized code for single flow
-  else {
-    // optimized code for multiple flows: foreground and background frames are generated for each flow and pointers are stored in arrays
-    // num_dest_nets <= 256 
-    struct rte_mbuf *fg_pkt_mbuf[256], *bg_pkt_mbuf[256]; // message buffers for fg. and bg. Test Frames
-    uint32_t curr_dst_ipv4; 	// IPv4 destination address, which will be changed
-    in6_addr curr_dst_ipv6; 	// foreground IPv6 destination address, which will be changed
-    in6_addr curr_dst_bg; 	// backround IPv6 destination address, which will be changed
-    int i; 			// cycle variable for grenerating different destination network addresses
-    if ( ip_version == 4 )
-      curr_dst_ipv4 = *dst_ipv4;
-    else // IPv6
-      curr_dst_ipv6 = *dst_ipv6;
-    curr_dst_bg = *dst_bg;
-
-    for ( i=0; i<num_dest_nets; i++ ) { 
+  if ( !varport ) {
+    // optimized code for using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4
+    if ( num_dest_nets == 1 ) { 	
+      // optimized code for single destination network: always the same foreground or background frame is sent, no arrays are used
+      struct rte_mbuf *fg_pkt_mbuf, *bg_pkt_mbuf; // message buffers for fg. and bg. Test Frames
       // create foreground Test Frame
-      if ( ip_version == 4 ) {
-        ((uint8_t *)&curr_dst_ipv4)[2] = (uint8_t) i; // bits 16 to 23 of the IPv4 address are rewritten, like in 198.18.x.2
-        fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, &curr_dst_ipv4);
-      }
-      else { // IPv6
-        ((uint8_t *)&curr_dst_ipv6)[7] = (uint8_t) i; // bits 56 to 63 of the IPv6 address are rewritten, like in 2001:2:0:00xx::1
-        fg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, &curr_dst_ipv6);
-      } 
+      if ( ip_version == 4 )
+        fg_pkt_mbuf = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, 0, 0);
+      else  // IPv6
+        fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+  
       // create backround Test Frame (always IPv6)
-      ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
-      bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg);
-    }
+      bg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
+  
+      // naive sender version: it is simple and fast
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); // Beware: an "empty" loop, and further two will come!
+        if ( sent_frames % n  < m )
+          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf, 1) ); // send foreground frame
+        else
+           while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf, 1) ); // send background frame
+      } // this is the end of the sending cycle
+    } // end of optimized code for single destination network
+    else {
+      // optimized code for multiple destination networks: foreground and background frames are generated for each network and pointers are stored in arrays
+      // assertion: num_dest_nets <= 256 
+      struct rte_mbuf *fg_pkt_mbuf[256], *bg_pkt_mbuf[256]; // message buffers for fg. and bg. Test Frames
+      uint32_t curr_dst_ipv4; 	// IPv4 destination address, which will be changed
+      in6_addr curr_dst_ipv6; 	// foreground IPv6 destination address, which will be changed
+      in6_addr curr_dst_bg; 	// backround IPv6 destination address, which will be changed
+      int i; 			// cycle variable for grenerating different destination network addresses
+      if ( ip_version == 4 )
+        curr_dst_ipv4 = *dst_ipv4;
+      else // IPv6
+        curr_dst_ipv6 = *dst_ipv6;
+      curr_dst_bg = *dst_bg;
+  
+      for ( i=0; i<num_dest_nets; i++ ) { 
+        // create foreground Test Frame
+        if ( ip_version == 4 ) {
+          ((uint8_t *)&curr_dst_ipv4)[2] = (uint8_t) i; // bits 16 to 23 of the IPv4 address are rewritten, like in 198.18.x.2
+          fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, &curr_dst_ipv4, 0, 0);
+        }
+        else { // IPv6
+          ((uint8_t *)&curr_dst_ipv6)[7] = (uint8_t) i; // bits 56 to 63 of the IPv6 address are rewritten, like in 2001:2:0:00xx::1
+          fg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, &curr_dst_ipv6, 0, 0);
+        } 
+        // create backround Test Frame (always IPv6)
+        ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
+        bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, 0, 0);
+      }
+   
+      // random number infrastructure is taken from: https://en.cppreference.com/w/cpp/numeric/random/uniform_int_distribution
+      // MT64 is used because of https://medium.com/@odarbelaeze/how-competitive-are-c-standard-random-number-generators-f3de98d973f0
+      // thread_local is used on the basis of https://stackoverflow.com/questions/40655814/is-mersenne-twister-thread-safe-for-cpp
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engine
+      thread_local std::mt19937_64 gen(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis(0, num_dest_nets-1);	// uniform distribution in [0, num_dest_nets-1]
+  
+      // naive sender version: it is simple and fast
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        int index = uni_dis(gen);	// index of the pre-generated frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); // Beware: an "empty" loop, and further two will come!
+        if ( sent_frames % n  < m )
+          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[index], 1) ); // send foreground frame
+        else
+           while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[index], 1) ); // send background frame
+      } // this is the end of the sending cycle
+    } // end of optimized code for multiple destination networks
+  } // end of optimized code for fixed port numbers
+  else {
+    // implementation of varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
+    // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
+    if ( num_dest_nets == 1 ) {
+      // optimized code for single destination network: always one of the same N pre-prepared foreground or background frames is updated and sent, 
+      // source and/or destination port number(s) and UDP checksum are updated
+      // N size arrays are used to resolve the write after send problem
+      int i; // cycle variable for the above mentioned purpose: takes {0..N-1} values
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N], *pkt_mbuf; // pointers of message buffers for fg. and bg. Test Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N], *bg_udp_sport[N], *bg_udp_dport[N], *bg_udp_chksum[N]; // pointers to the given fields
+      uint16_t *udp_sport, *udp_dport, *udp_chksum; // working pointers to the given fields
+      uint16_t fg_udp_chksum_start, bg_udp_chksum_start;  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done 
+      uint16_t sp, dp; // values of source and destination port numbers -- temporary values
+      
+      for ( i=0; i<N; i++ ) {
+        // create foreground Test Frame
+        if ( ip_version == 4 ) {
+          fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+          fg_udp_sport[i] = pkt + 34;
+          fg_udp_dport[i] = pkt + 36;
+          fg_udp_chksum[i] = pkt + 40;
+        } else { // IPv6
+          fg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+          fg_udp_sport[i] = pkt + 54;
+          fg_udp_dport[i] = pkt + 56;
+          fg_udp_chksum[i] = pkt + 60;
+        }
+        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+        // create backround Test Frame (always IPv6)
+        bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
+        pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+        bg_udp_sport[i] = pkt + 54;
+        bg_udp_dport[i] = pkt  + 56;
+        bg_udp_chksum[i] = pkt + 60;
+        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+      } 
+
+      // set the starting values of port numbers, if they are increased or decreased
+      if ( var_sport == 1 )
+        sport = sport_min; 
+      if ( var_sport == 2 )
+        sport = sport_max;
+      if ( var_dport == 1 )
+        dport = dport_min; 
+      if ( var_dport == 2 )
+        dport = dport_max;
+
+      // prepare random number infrastructure
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engines
+      thread_local std::mt19937_64 gen_sport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_dport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_sport(sport_min, sport_max);	// uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<int> uni_dis_dport(dport_min, dport_max);	// uniform distribution in [sport_min, sport_max]
+
+      // naive sender version: it is simple and fast
+      i=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          chksum = fg_udp_chksum_start;
+          udp_sport = (uint16_t *)fg_udp_sport[i];
+          udp_dport = (uint16_t *)fg_udp_dport[i];
+          udp_chksum = (uint16_t *)fg_udp_chksum[i];
+          pkt_mbuf = fg_pkt_mbuf[i];
+        } else {
+          // background frame is to be sent
+          chksum = bg_udp_chksum_start;
+          udp_sport = (uint16_t *)bg_udp_sport[i];
+          udp_dport = (uint16_t *)bg_udp_dport[i];
+          udp_chksum = (uint16_t *)bg_udp_chksum[i];
+          pkt_mbuf = bg_pkt_mbuf[i];
+        }
+        // from here, we need to handle the frame identified by the temprary variables
+        if ( var_sport ) {
+          // sport is varying
+          switch ( var_sport ) {
+            case 1:			// increasing port numbers
+              sp = sport++;
+              if ( sport == sport_max )
+                sport = sport_min;
+              break;
+            case 2:			// decreasing port numbers
+              sp = sport--;
+              if ( sport == sport_min )
+                sport = sport_max;
+              break;
+            case 3:			// pseudorandom port numbers
+              sp = uni_dis_sport(gen_sport);
+          }
+          *udp_sport = htons(sp); 	// set source port 
+          chksum += sp;			// add to checksum
+        }
+        if ( var_dport ) {
+          // dport is varying
+          switch ( var_dport ) {
+            case 1:                   	// increasing port numbers
+              dp = dport++;
+              if ( dport == dport_max )
+                dport = dport_min;
+              break;
+            case 2:                   	// decreasing port numbers
+              dp = dport--;
+              if ( dport == dport_min )
+                dport = dport_max;
+              break;
+            case 3:                   	// pseudorandom port numbers
+              dp = uni_dis_dport(gen_dport);
+          }
+          *udp_dport = htons(dp); 	// set destination port
+          chksum += dp;               	// add to checksum
+        }
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+        chksum = (~chksum) & 0xffff;                                  	// make one's complement
+        if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+        // finally, when its time is here, send the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) ); 		// send out the frame
+        i = (i+1) % N;
+      } // this is the end of the sending cycle
+    } // end of optimized code for single destination network
+    else { 
+      // optimized code for multiple destination networks: N copies of foreground or background frames are prepared for each destination network,
+      // N size arrays are used to resolve the write after send problem
+      // source and/or destination port number(s) and UDP checksum are updated in the actually used copy before sending
+      // assertion: num_dest_nets <= 256
+      int j; // cycle variable to index the N size array: takes {0..N-1} values
+      struct rte_mbuf *fg_pkt_mbuf[256][N], *bg_pkt_mbuf[256][N], *pkt_mbuf; // pointers of message buffers for fg. and bg. Test Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_sport[256][N], *fg_udp_dport[256][N], *fg_udp_chksum[256][N]; // pointers to the given fields of the pre-prepared Test Frames
+      uint8_t *bg_udp_sport[256][N], *bg_udp_dport[256][N], *bg_udp_chksum[256][N]; // pointers to the given fields of the pre-prepared Test Frames
+      uint16_t *udp_sport, *udp_dport, *udp_chksum; // working pointers to the given fields
+      uint16_t fg_udp_chksum_start[256], bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done
+      uint16_t sp, dp; // values of source and destination port numbers -- temporary values
+      uint32_t curr_dst_ipv4;     // IPv4 destination address, which will be changed
+      in6_addr curr_dst_ipv6;     // foreground IPv6 destination address, which will be changed
+      in6_addr curr_dst_bg;       // backround IPv6 destination address, which will be changed
+      int i;                      // cycle variable for grenerating different destination network addresses
  
-    // random number infrastructure is taken from: https://en.cppreference.com/w/cpp/numeric/random/uniform_int_distribution
-    // MT64 is used because of https://medium.com/@odarbelaeze/how-competitive-are-c-standard-random-number-generators-f3de98d973f0
-    // thread_local is used on the basis of https://stackoverflow.com/questions/40655814/is-mersenne-twister-thread-safe-for-cpp
-    thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engine
-    thread_local std::mt19937_64 gen(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
-    std::uniform_int_distribution<int> uni_dis(0, num_dest_nets-1);	// uniform distribution in [0, num_dest_nets-1]
+      if ( ip_version == 4 )
+        curr_dst_ipv4 = *dst_ipv4;
+      else // IPv6
+        curr_dst_ipv6 = *dst_ipv6;
+      curr_dst_bg = *dst_bg;
 
-    // naive sender version: it is simple and fast
-    for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
-      int index = uni_dis(gen);	// index of the pre-generated frame
-      while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); // Beware: an "empty" loop, and further two will come!
-      if ( sent_frames % n  < m )
-        while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[index], 1) ); // send foreground frame
-      else
-         while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[index], 1) ); // send background frame
-    } // this is the end of the sending cycle
-  } // end of optimized code for multiple flows
+      // create Test Frames
+      for ( j=0; j<N; j++ ) {
+        for ( i=0; i<num_dest_nets; i++ ) {
+          // create foreground Test Frame (IPv4 or IPv6)
+          if ( ip_version == 4 ) {
+            ((uint8_t *)&curr_dst_ipv4)[2] = (uint8_t) i; // bits 16 to 23 of the IPv4 address are rewritten, like in 198.18.x.2
+            fg_pkt_mbuf[i][j] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, &curr_dst_ipv4, var_sport, var_dport);
+            pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the Test Frame in the message buffer
+            fg_udp_sport[i][j] = pkt + 34;
+            fg_udp_dport[i][j] = pkt + 36;
+            fg_udp_chksum[i][j] = pkt + 40;
+          } else { // IPv6
+            ((uint8_t *)&curr_dst_ipv6)[7] = (uint8_t) i; // bits 56 to 63 of the IPv6 address are rewritten, like in 2001:2:0:00xx::1
+            fg_pkt_mbuf[i][j] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, &curr_dst_ipv6, var_sport, var_dport);
+            pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the Test Frame in the message buffer
+            fg_udp_sport[i][j] = pkt + 54;
+            fg_udp_dport[i][j] = pkt + 56;
+            fg_udp_chksum[i][j] = pkt + 60;
+          }
+          fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          // create backround Test Frame (always IPv6)
+          ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
+          bg_pkt_mbuf[i][j] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i][j], uint8_t *); // Access the Test Frame in the message buffer
+          bg_udp_sport[i][j] = pkt + 54;
+          bg_udp_dport[i][j] = pkt  + 56;
+          bg_udp_chksum[i][j] = pkt + 60;
+          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+        }
+      }
 
+      // set the starting values of port numbers, if they are increased or decreased
+      if ( var_sport == 1 )
+        sport = sport_min;
+      if ( var_sport == 2 )
+        sport = sport_max;
+      if ( var_dport == 1 )
+        dport = dport_min;
+      if ( var_dport == 2 )
+        dport = dport_max;
+
+      // prepare random number infrastructure
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engines
+      thread_local std::mt19937_64 gen_net(rd()); //Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_sport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_dport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_net(0, num_dest_nets-1);     // uniform distribution in [0, num_dest_nets-1]
+      std::uniform_int_distribution<int> uni_dis_sport(sport_min, sport_max);   // uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<int> uni_dis_dport(dport_min, dport_max);   // uniform distribution in [sport_min, sport_max]
+
+      // naive sender version: it is simple and fast
+      j=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        int index = uni_dis_net(gen_net); // index of the pre-generated Test Frame for the given destination network
+        // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          chksum = fg_udp_chksum_start[index];
+          udp_sport = (uint16_t *)fg_udp_sport[index][j];
+          udp_dport = (uint16_t *)fg_udp_dport[index][j];
+          udp_chksum = (uint16_t *)fg_udp_chksum[index][j];
+          pkt_mbuf = fg_pkt_mbuf[index][j];
+        } else {
+          // background frame is to be sent
+          chksum = bg_udp_chksum_start[index];
+          udp_sport = (uint16_t *)bg_udp_sport[index][j];
+          udp_dport = (uint16_t *)bg_udp_dport[index][j];
+          udp_chksum = (uint16_t *)bg_udp_chksum[index][j];
+          pkt_mbuf = bg_pkt_mbuf[index][j];
+        }
+        // from here, we need to handle the frame identified by the temprary variables
+        if ( var_sport ) {
+          // sport is varying
+          switch ( var_sport ) {
+            case 1:                     // increasing port numbers
+              sp = sport++;
+              if ( sport == sport_max )
+                sport = sport_min;
+              break;
+            case 2:                     // decreasing port numbers
+              sp = sport--;
+              if ( sport == sport_min )
+                sport = sport_max;
+              break;
+            case 3:                     // pseudorandom port numbers
+              sp = uni_dis_sport(gen_sport);
+          }
+          *udp_sport = htons(sp);       // set source port
+          chksum += sp;                 // add to checksum
+        }
+        if ( var_dport ) {
+          // dport is varying
+          switch ( var_dport ) {
+            case 1:                     // increasing port numbers
+              dp = dport++;
+              if ( dport == dport_max )
+                dport = dport_min;
+              break;
+            case 2:                     // decreasing port numbers
+              dp = dport--;
+              if ( dport == dport_min )
+                dport = dport_max;
+              break;
+            case 3:                     // pseudorandom port numbers
+              dp = uni_dis_dport(gen_dport);
+          }
+          *udp_dport = htons(dp);       // set destination port
+          chksum += dp;                 // add to checksum
+        }
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = (~chksum) & 0xffff;                                    // make one's complement
+        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+        // finally, when its time is here, send the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    // Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );           // send out the frame
+        j = (j+1) % N;
+      } // this is the end of the sending cycle
+    } // end of the optimized code for multiple destination networks
+  } // end of implementation of varying port numbers 
   // Now, we check the time
   elapsed_seconds = (double)(rte_rdtsc()-start_tsc)/hz;
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
@@ -802,7 +1170,8 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
 
     // then, initialize the parameter class instance
     senderParameters spars(&scp,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                           ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets);
+                           ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                           fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
                             
     // start left sender
     if ( rte_eal_remote_launch(send, &spars, cpu_left_sender) )
@@ -825,7 +1194,8 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
 
     // then, initialize the parameter class instance
     senderParameters spars(&scp,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                           ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets);
+                           ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                           rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
 
     // start right sender
     if (rte_eal_remote_launch(send, &spars, cpu_right_sender) )
@@ -870,7 +1240,8 @@ senderCommonParameters::senderCommonParameters(uint16_t ipv6_frame_size_, uint16
 senderParameters::senderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
-                                   uint16_t num_dest_nets_) {
+                                   uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
+                   		   uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_) {
   cp = cp_;
   ip_version = ip_version_;
   pkt_pool = pkt_pool_;
@@ -885,6 +1256,12 @@ senderParameters::senderParameters(class senderCommonParameters *cp_, int ip_ver
   src_bg = src_bg_;
   dst_bg = dst_bg_;
   num_dest_nets = num_dest_nets_;
+  var_sport = var_sport_;
+  var_dport = var_dport_;
+  sport_min = sport_min_;
+  sport_max = sport_max_;
+  dport_min = dport_min_;
+  dport_max = dport_max_;
 }
 
 // sets the values of the data fields

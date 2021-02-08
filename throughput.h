@@ -1,6 +1,8 @@
 /* Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK
+ * Variable port feature is also added to comply with RFC 4814,
+ * for more information: https://tools.ietf.org/html/rfc4814#section-4.5
  *
- *  Copyright (C) 2019 Gabor Lencse
+ *  Copyright (C) 2019-2020 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -57,6 +59,24 @@ public:
 
   uint8_t memory_channels; // Number of memory channnels (for the EAL init.)
 
+  // encoding: 0: use fix ports as defined in RFC 2544, 1: increase, 2: decrease, 3: pseudorandom
+  unsigned fwd_var_sport;       // control value for fixed or variable source port numbers
+  unsigned fwd_var_dport;       // control value for fixed or variable destination port numbers
+  unsigned fwd_varport;         // derived logical value: at least one port has to be changed?
+  unsigned rev_var_sport;       // control value for fixed or variable source port numbers
+  unsigned rev_var_dport;       // control value for fixed or variable destination port numbers
+  unsigned rev_varport;         // derived logical value: at least one port has to be changed?
+
+  uint16_t fwd_sport_min;       // minumum value for source port
+  uint16_t fwd_sport_max;       // maximum value for source port
+  uint16_t fwd_dport_min;       // minumum value for destination port
+  uint16_t fwd_dport_max;       // maximum value for destination port
+
+  uint16_t rev_sport_min;       // minumum value for source port
+  uint16_t rev_sport_max;       // maximum value for source port
+  uint16_t rev_dport_min;       // minumum value for destination port
+  uint16_t rev_dport_max;       // maximum value for destination port
+
   // positional parameters from command line
   uint16_t ipv6_frame_size;	// size of the frames carrying IPv6 datagrams (including the 4 bytes of the FCS at the end) 
   uint16_t ipv4_frame_size; 	// redundant parameter, automatically set as ipv6_frame_size-20
@@ -78,7 +98,7 @@ public:
   int readConfigFile(const char *filename);
   int readCmdLine(int argc, const char *argv[]);
   int init(const char *argv0, uint16_t leftport, uint16_t rightport);
-  virtual int senderPoolSize(int numDestNets);
+  virtual int senderPoolSize(int numDestNets, int varport);
   void numaCheck(uint16_t port, const char *port_side, int cpu, const char *cpu_name);
 
   // perform throughput measurement
@@ -90,14 +110,14 @@ public:
 // functions to create Test Frames (and their parts)
 struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                                 const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                                const uint32_t *src_ip, const uint32_t *dst_ip);
+                                const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport);
 void mkEthHeader(struct ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type);
 void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, const uint32_t *dst_ip);
-void mkUdpHeader(struct udp_hdr *udp, uint16_t length); 
+void mkUdpHeader(struct udp_hdr *udp, uint16_t length, unsigned var_sport, unsigned var_dport); 
 void mkData(uint8_t *data, uint16_t length);
 struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                                 const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                                const struct in6_addr *src_ip, const struct in6_addr *dst_ip);
+                                const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport);
 void mkIpv6Header(struct ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip);
 
 // report the current TSC of the exeucting core
@@ -140,10 +160,14 @@ class senderParameters {
   struct in6_addr *src_ipv6, *dst_ipv6;
   struct in6_addr *src_bg, *dst_bg;
   uint16_t num_dest_nets;
+  unsigned var_sport, var_dport;
+  uint16_t sport_min, sport_max, dport_min, dport_max;
+
   senderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
-                   uint16_t num_dest_nets_);
+                   uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
+	           uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_);
 };
 
 // to store parameters for each receiver 

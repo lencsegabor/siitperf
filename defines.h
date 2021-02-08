@@ -1,6 +1,8 @@
 /* Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK
+ * Variable port feature is also added to comply with RFC 4814,
+ * for more information: https://tools.ietf.org/html/rfc4814#section-4.5
  *
- *  Copyright (C) 2019 Gabor Lencse
+ *  Copyright (C) 2019-2020 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -25,7 +27,7 @@
 #define MAX_PORT_TRIALS 10      /* rte_eth_link_get() is attempted maximum so many times, and error is reported if still unsuccessful */
 #define START_DELAY 2000        /* Delay (ms) before senders start sending, used for synchronized start. Beware that DUT NICs need time to get ready! */
 #define TOLERANCE 1.00001       /* Maximum allowed time inaccuracy, 1.00001 allows 0.001% more time for sending */
-#define N 40			/* used for PDV: all frames exist is N copies to mitigate the problem of write after send */
+#define N 40			/* used for PDV and varport: all frames exist is N copies to mitigate the problem of write after send */
 
 // values taken from DPDK sample programs
 #define MAX_PKT_BURST 32        /* Maximum burst size for rte_eth_rx_burst() */

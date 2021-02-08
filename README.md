@@ -94,6 +94,21 @@ Then "siitperf.conf" has the following content:
 	CPU-L-Recv 8 # Left Receiver runs on this core
 	
 	MEM-Channels 2 # Number of Memory Channels
+
+	# parameters for RFC 4814 random port feature
+
+	Fwd-var-sport 3 # Does source port vary? 0: fix, 1: increase, 2: decrease, 3: random
+	Fwd-var-dport 3 # Does destination port vary? 0: fix, 1: increase, 2: decrease, 3: random
+	Fwd-sport-min 1024
+	Fwd-sport-max 65535
+	Fwd-dport-min 1
+	Fwd-dport-max 49151
+	Rev-var-sport 3 # Does source port vary? 0: fix, 1: increase, 2: decrease, 3: random
+	Rev-var-dport 3 # Does destination port vary? 0: fix, 1: increase, 2: decrease, 3: random
+	Rev-sport-min 1024
+	Rev-sport-max 65535
+	Rev-dport-min 1
+	Rev-dport-max 49151
 	
 
 All three programs use the same "siitperf.conf" file, and their command line parametes are also very similar. They use the following ones:
@@ -161,8 +176,8 @@ As it can be also seen, we used 1GB hugepages. If your CPU does not have the "pd
 Further Information
 -------------------
 
-For further information on the design, implementation and initial peformance estimation of siitperf, please read our paper:
-G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateless NAT64 Gateways", under review in _IEICE Transactions on Communications_, review version is available: http://www.hit.bme.hu/~lencse/publications/IEICE-2019-siitperf-for-review.pdf (may be updated or removed)
+For further information on the design, implementation and initial peformance estimation of siitperf, please read our (open access) paper:
+G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateless NAT64 Gateways", _IEICE Transactions on Communications_, DOI: 10.1587/transcom.2019EBN0010, avilable: http://doi.org/10.1587/transcom.2019EBN0010 
 
 Any feedbacks (including questions, feature requests, comments, suggestions, etc.) are welcomed by the author.
 
