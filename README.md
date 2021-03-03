@@ -2,6 +2,7 @@ siitperf
 ========
 
 Siitperf is an RFC 8219 compliant SIIT (stateless NAT64) tester written in C++ using DPDK, and it can be used under the Linux operating system.
+It is extended to support stateful NAT64 and stataful NAT44 (also called NAPT) tests, too. Stateful extension is in very alpha stage, and only siitperf-tp supports it (see below).
 
 Introduction
 ------------
@@ -109,9 +110,16 @@ Then "siitperf.conf" has the following content:
 	Rev-sport-max 65535
 	Rev-dport-min 1
 	Rev-dport-max 49151
-	
 
-All three programs use the same "siitperf.conf" file, and their command line parametes are also very similar. They use the following ones:
+	# parameters for stateful tests
+
+	Stateful 1 # Initiator is on the left side, Responder is on the right side
+	Enumerate-ports 0 # no port enumeration
+	Responder-ports 3 # Responder chooses 4-tuples randomly
+
+
+
+All three programs use the same "siitperf.conf" file, and their command line parametes are also very similar. They use the following ones (in stateless tests):
 
 	./build/siitperf-tp <IPv6 size> <rate> <duration> <global timeout> <n> <m>
 	./build/siitperf-lat <IPv6 size> <rate> <duration> <global timeout> <n> <m> <delay> <timestamps>
@@ -141,9 +149,21 @@ __frame timeout__: frame timeout (in milliseconds). If the value of this paramet
 
 We note that the specified frames size always interpreted as IPv6 frame size, even if pure IPv4 measurements are done (both sides are configured as IPv4 and there is no backround traffic), and in this case the allowed range is 84-1538, to be able to use 64-1518 bytes long IPv4 frames.
 
-The execution of the measurements are supported by the following scripts:
+The stateful extension uses further command line paremeters:
 
-__binary-rate-alg.sh__: Implements a binary search for througput measurements using siitperf-tp.
+	./build/siitperf-tp <IPv6 size> <rate> <duration> <global timeout> <n> <m> <N> <M> <R> <T> <D>
+
+The additional command line parameters are to be interpreted as follows:
+
+__N__: the number of test frames to send in the preliminary phase (1 – 2^32-1)
+__M__: the number of entries in the state table of the Tester (1 – 2^32-1)
+__R__: the frame rate, at which the test frames are sent during the preliminary phase (in frames per second)
+__T__: the global timeout for the preliminary frames (in milliseconds, 1 – 2000)
+__D__: the overall delay caused by the preliminary phase (in milliseconds, 1 – 100,000)
+
+The execution of the measurements are supported by the following scripts (they support only stateless tests):
+
+__binary-rate-alg.sh__: Implements a binary search for througput measurements using siitperf-tp. 
 
 __frame-loss.sh-scan__: Performs frame loss rate measurements using siitperf-tp. The frames rates to be tested can be specified by the range and stepping. The frame sizes to be tested may also be listed.
 
@@ -177,7 +197,7 @@ Further Information
 -------------------
 
 For further information on the design, implementation and initial peformance estimation of siitperf, please read our (open access) paper:
-G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateless NAT64 Gateways", _IEICE Transactions on Communications_, DOI: 10.1587/transcom.2019EBN0010, avilable: http://doi.org/10.1587/transcom.2019EBN0010 
+G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateless NAT64 Gateways", _IEICE Transactions on Communications_, vol. E104-B, no.2, pp. 128-140. February 1, 2021. DOI: 10.1587/transcom.2019EBN0010, avilable: http://doi.org/10.1587/transcom.2019EBN0010 
 
 Any feedbacks (including questions, feature requests, comments, suggestions, etc.) are welcomed by the author.
 

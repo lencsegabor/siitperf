@@ -26,6 +26,7 @@
 #include <random>
 #include <iostream>
 #include <algorithm>
+#include <atomic>
 #include <rte_lcore.h>
 #include <rte_mempool.h>
 #include <rte_cycles.h>

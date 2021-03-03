@@ -1,8 +1,11 @@
-/* Siitperf is an RFC 8219 SIIT (stateless NAT64) tester written in C++ using DPDK
- * Variable port feature is also added to comply with RFC 4814,
- * for more information: https://tools.ietf.org/html/rfc4814#section-4.5
+/* Siitperf was originally an RFC 8219 SIIT (stateless NAT64) tester 
+ * written in C++ using DPDK in 2019.
+ * RFC 4814 variable port number feature was added in 2020.
+ * Extension for stateful tests was done in 2021.
+ * Now it supports benchmarking of stateful NAT64 and stateful NAT44 
+ * gateways, but stateful NAT66 and stateful NAT46 are out of scope.
  * 
- *  Copyright (C) 2019-2020 Gabor Lencse
+ *  Copyright (C) 2019-2021 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -28,7 +31,7 @@ char coresList[101]; // buffer for preparing the list of lcores for DPDK init (l
 char numChannels[11]; // buffer for printing the number of memory channels into a string for DPDK init (like a command line argument)
 
 Throughput::Throughput(){
-  // initialize some data members to default or invalid value
+  // initialize some data members to default or invalid values
   ip_left_version = 6;	 	// default value for NAT64 benchmarking
   ip_right_version = 4; 	// default value for NAT64 benchmarking
   forward = 1;			// default value, left to right direction is active
@@ -53,6 +56,11 @@ Throughput::Throughput(){
   rev_sport_max = 65535;	// default value: use maximum range recommended by RFC 4814
   rev_dport_min = 1;		// default value: use maximum range recommended by RFC 4814
   rev_dport_max = 49151;	// default value: use maximum range recommended by RFC 4814
+  stateful = 0;			// default value: perform stateless test
+  enumerate_ports = 0;		// default value: do not enumerate ports: Initiator acts like a stateless sender
+  responder_ports = 0;		// default value: use a single four tuple (like fix port numbers)
+  stateTable = 0;  		// to cause segmentation fault if not initialized
+  valid_entries = 0;   		// to indicate that state table is empty (used by rsend)
 };
 
 // finds a 'key' (name of a parameter) in the 'line' string
@@ -313,6 +321,24 @@ int Throughput::readConfigFile(const char *filename) {
         std::cerr << "Input Error: Unable to read 'Rev-dport-max'." << std::endl;
         return -1;
       }
+    } else if ( (pos = findKey(line, "Stateful")) >= 0 ) {
+      sscanf(line+pos, "%u", &stateful);
+      if ( stateful > 3 ) {
+        std::cerr << "Input Error: 'Stateful' must be 0, 1, 2, or 3." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Responder-ports")) >= 0 ) {
+      sscanf(line+pos, "%u", &responder_ports);
+      if ( responder_ports > 3 ) {
+        std::cerr << "Input Error: 'Responder-ports' must be 0, 1, 2, or 3." << std::endl;
+        return -1;
+      }
+    } else if ( (pos = findKey(line, "Enumerate-ports")) >= 0 ) {
+      sscanf(line+pos, "%u", &enumerate_ports);
+      if ( enumerate_ports > 1 ) {
+        std::cerr << "Input Error: 'Enumerate-ports' must be 0 or 1." << std::endl;
+        return -1;
+      }
     } else if ( nonComment(line) ) { // It may be too strict!
         std::cerr << "Input Error: Cannot interpret '" << filename << "' line " << line_no << ":" << std::endl;
         std::cerr << line << std::endl;
@@ -320,13 +346,16 @@ int Throughput::readConfigFile(const char *filename) {
     } 
   }
   fclose(f);
-  // check if at least one direction is active
-  if ( forward == 0 && reverse == 0 ) {
-    std::cerr << "Input Error: No active direction was specified." << std::endl;
-    return -1;
-  }
+  if ( !stateful ) {
+    // check if at least one direction is active (compulsory for stateless tests)
+    if ( forward == 0 && reverse == 0 ) {
+      std::cerr << "Input Error: No active direction was specified." << std::endl;
+      return -1;
+    }
+  } 
+  
   // check if the necessary lcores were specified
-  if ( forward ) {
+  if ( stateful==1 || forward ) {
     if ( cpu_left_sender < 0 ) {
       std::cerr << "Input Error: No 'CPU-L-Send' was specified." << std::endl;
       return -1;
@@ -336,7 +365,7 @@ int Throughput::readConfigFile(const char *filename) {
       return -1;
     }
   }
-  if ( reverse ) {
+  if ( stateful==2 || reverse ) {
     if ( cpu_right_sender < 0 ) {
       std::cerr << "Input Error: No 'CPU-R-Send' was specified." << std::endl;
       return -1;
@@ -349,13 +378,35 @@ int Throughput::readConfigFile(const char *filename) {
   // calculate the derived values, if any port numbers has to be changed
   fwd_varport = fwd_var_sport || fwd_var_dport;
   rev_varport = rev_var_sport || rev_var_dport;
+
+  // sanity checks regarding port eumeration
+  switch ( stateful ) {
+    case 0: // stateless tests
+      if ( enumerate_ports ) {
+        std::cerr << "Input Error: Port enumeration is available with stateful tests only." << std::endl;
+        return -1;
+      }
+      break;
+    case 1: // Initiator is on the left side
+      if ( enumerate_ports && num_right_nets > 1 ) {
+        std::cerr << "Input Error: Port enumeration is available with a single destination network only." << std::endl;
+        return -1;
+      }
+      break;
+    case 2: // Initiator is on the right side
+      if ( enumerate_ports && num_left_nets > 1 ) {
+        std::cerr << "Input Error: Port enumeration is available with a single destination network only." << std::endl;
+        return -1;
+      }
+      break;
+  }
   return 0;
 }
 
 // reads the command line arguments and stores the information in data members of class Throughput
 // It may be called only AFTER the execution of readConfigFile
 int Throughput::readCmdLine(int argc, const char *argv[]) {
-  if (argc < 7) {
+  if ( argc < 7 || stateful && argc < 12 ) {
     std::cerr << "Input Error: Too few command line arguments." << std::endl;
     return -1;
   }
@@ -391,11 +442,50 @@ int Throughput::readCmdLine(int argc, const char *argv[]) {
     std::cerr << "Input Error: IPv6 frame sizes between 1518 and 1538 are allowed for pure IPv4 traffic only (as IPv4 frames are 20 bytes shorter)." << std::endl;
     return -1;
   }
+  if ( stateful ) {
+    if ( sscanf(argv[7], "%u", &pre_frames) != 1 || pre_frames < 1 ) {
+      std::cerr << "Input Error: 'N' (the number of preliminary frames) must be between 1 and 2^32-1." << std::endl;
+      return -1;
+    }
+    if ( sscanf(argv[8], "%u", &state_table_size) != 1 || state_table_size < 1 ) {
+      std::cerr << "Input Error: 'M' (the size of the state table of the Responder) must be between 1 and 2^32-1." << std::endl;
+      return -1;
+    }
+    if ( sscanf(argv[9], "%u", &pre_rate) != 1 || frame_rate < 1 || frame_rate > 14880952 ) {
+      std::cerr << "Input Error: Preliminary frame rate 'R' must be between 1 and 14880952." << std::endl;
+      return -1;
+    }
+    if ( sscanf(argv[10], "%u", &pre_timeout) != 1 || pre_timeout < 1 || pre_timeout > 2000 ) {
+      std::cerr << "Input Error: the value of 'T' (global timeout for the preliminary frames) must be between 1 and 2000." << std::endl;
+      return -1;
+    }
+    if ( sscanf(argv[11], "%u", &pre_delay) != 1 || pre_delay < 1 || pre_delay > 100000 ) {
+      std::cerr << "Input Error: the value of 'D' (delay caused by the preliminary phase) must be between 1 and 100000." << std::endl;
+      return -1;
+    }
+    if ( ((uint64_t)1000)*pre_frames/pre_rate+pre_timeout > pre_delay ) {
+      std::cerr << "Input Error: 1000*N/R+T > D (preliminary test may not be performed in the available time period)." << std::endl;
+      return -1;
+    }
+    else
+      std::cout << "Info: 1000*N/R+T: " << ((uint64_t)1000)*pre_frames/pre_rate+pre_timeout << " <= D: " << pre_delay << std::endl;
+    if ( pre_frames*m/n < state_table_size ) {
+      std::cerr << "Input Error: N*m/n < M (there are not enough foreground frames to fill the state table)." << std::endl;
+      return -1;
+    }
+    if ( responder_ports && state_table_size==1 ) {
+      std::cerr << "Input Error: 'Responder-ports' MUST be set to 0, if the size of the state table (M) is 1." << std::endl;
+      return -1;
+    }
 
+  std::cout << "Info: Stateful test cmdline parameteres: N: " << pre_frames << ", M: " << state_table_size << 
+               ", R: " << pre_rate << ", T: " << pre_timeout << ", D: " << pre_delay << std::endl;
+  }
   return 0;
 }
 
 // Initializes DPDK EAL, starts network ports, creates and sets up TX/RX queues, checks NUMA localty and TSC synchronization of lcores
+// sets the values of some variables (Throughput data members)
 int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
   const char *rte_argv[6]; // parameters for DPDK EAL init, e.g.: {NULL, "-l", "4,5,6,7", "-n", "2", NULL};
   int rte_argc = static_cast<int>(sizeof(rte_argv) / sizeof(rte_argv[0])) - 1; // argc value for DPDK EAL init
@@ -407,10 +497,10 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
   rte_argv[0]=argv0; 	// program name
   rte_argv[1]="-l";	// list of lcores will follow
   // Only lcores for the active directions are to be included (at least one of them MUST be non-zero)
-  if ( forward && reverse ) {
+  if ( forward && reverse || stateful==1 && reverse || stateful==2 && forward ) {
     // both directions are active 
     snprintf(coresList, 101, "0,%d,%d,%d,%d", cpu_left_sender, cpu_right_receiver, cpu_right_sender, cpu_left_receiver);
-  } else if ( forward )
+  } else if ( forward || stateful==1 )
     snprintf(coresList, 101, "0,%d,%d", cpu_left_sender, cpu_right_receiver); // only forward (left to right) is active 
   else 
     snprintf(coresList, 101, "0,%d,%d", cpu_right_sender, cpu_left_receiver); // only reverse (right to left) is active
@@ -455,8 +545,13 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
   // Sender pool size calculation uses 0 instead of num_{left,right}_nets, when no actual frame sending is needed. 
 
   // calculate packet pool sizes and then create the pools
-  int left_sender_pool_size = senderPoolSize(forward ? num_right_nets: 0, fwd_varport ? 1 : 0 );
-  int right_sender_pool_size = senderPoolSize(forward ? num_right_nets: 0, rev_varport ? 1 : 0 );
+  int effective_right_nets = (stateful==1 ? num_right_nets : 0) + (forward ? num_right_nets : 0); // preliminary traffic of stateful test + normal traffic
+  int effective_forward_varport = fwd_varport || stateful==1 && enumerate_ports || stateful==2 && responder_ports;
+  int left_sender_pool_size = senderPoolSize( effective_right_nets, effective_forward_varport );
+  int effective_left_nets = (stateful==2 ? num_left_nets : 0) + (reverse ? num_left_nets : 0); // preliminary traffic of stateful test + normal traffic
+  int effective_reverse_varport = rev_varport || stateful==2 && enumerate_ports || stateful==1 && responder_ports;
+  int right_sender_pool_size = senderPoolSize( effective_left_nets, effective_reverse_varport );
+
   int receiver_pool_size = PORT_RX_QUEUE_SIZE + 2 * MAX_PKT_BURST + 100; // While one of them is processed, the other one is being filled. 
 
   pkt_pool_left_sender = rte_pktmbuf_pool_create ( "pp_left_sender", left_sender_pool_size, PKTPOOL_CACHE, 0, 
@@ -543,6 +638,14 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
     if ( numa_num_configured_nodes() == 1 )
       std::cout << "Info: Only a single NUMA node is configured, there is no possibilty for mismatch." << std::endl;
     else {
+      if ( stateful==1 ) {
+        numaCheck(leftport, "Left", cpu_left_sender, "Initiator/Sender");
+        numaCheck(rightport, "Right", cpu_right_receiver, "Responder/Receiver");
+      }
+      if ( stateful==2 ) {
+        numaCheck(rightport, "Right", cpu_right_sender, "Initiator/Sender");
+        numaCheck(leftport, "Left", cpu_left_receiver, "Responder/Receiver");
+      }
       if ( forward ) {
         numaCheck(leftport, "Left", cpu_left_sender, "Left Sender");
         numaCheck(rightport, "Right", cpu_right_receiver, "Right Receiver");
@@ -555,6 +658,14 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
   }
 
   // Some sanity checks: TSCs of the used cores are synchronized or not...
+  if ( stateful==1 ) {
+    check_tsc(cpu_left_sender, "Initiator/Sender");
+    check_tsc(cpu_right_receiver, "Responder/Receiver");
+  }
+  if ( stateful==2 ) {
+    check_tsc(cpu_right_sender, "Initiator/Sender");
+    check_tsc(cpu_left_receiver, "Responder/Receiver");
+  }
   if ( forward ) {
     check_tsc(cpu_left_sender, "Left Sender");
     check_tsc(cpu_right_receiver, "Right Receiver");
@@ -566,8 +677,23 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
 
   // prepare further values for testing
   hz = rte_get_timer_hz();		// number of clock cycles per second
-  start_tsc = rte_rdtsc()+hz*START_DELAY/1000;	// Each active sender starts sending at this time
-  finish_receiving = start_tsc + hz*(duration+global_timeout/1000.0); 	// Each receiver stops at this time
+  if ( !stateful) {
+    //for stateless tests:
+    start_tsc = rte_rdtsc()+hz*START_DELAY/1000;	// Each active sender starts sending at this time
+    finish_receiving = start_tsc + hz*duration + hz*global_timeout/1000; 	// Each receiver stops at this time
+  }
+  else
+  {
+    // for stateful tests:
+    // the sender of the Initiator starts sending preliminary frames at this time:
+    start_tsc_pre = rte_rdtsc()+hz*START_DELAY/1000;
+    // the receiver of the Responder stops receiving preliminary frames at this time:
+    finish_receiving_pre = start_tsc_pre + hz*pre_frames/pre_rate + hz*pre_timeout/1000; 
+    // production test starts at this time:
+    start_tsc = start_tsc_pre + hz*pre_delay/1000;
+    // productions test receivers stop at this time:
+    finish_receiving = start_tsc + hz*duration + hz*global_timeout/1000; 
+  }
   return 0;
 }
 
@@ -610,12 +736,13 @@ void check_tsc(int cpu, const char *cpu_name) {
 }
 
 // creates an IPv4 Test Frame using several helper functions
+// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
 struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Test Frame
   if ( !pkt_mbuf )
-    rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the Test Frame! \n", side);
+    rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the IPv4 Test Frame! \n", side);
   length -=  ETHER_CRC_LEN; // exclude CRC from the frame length
   pkt_mbuf->pkt_len = pkt_mbuf->data_len = length; // set the length in both places
   uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); // Access the Test Frame in the message buffer
@@ -638,14 +765,14 @@ struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char
 
 // Please refer to RFC 2544 Appendx C.2.6.4 Test Frames for the values to be set in the test frames.
 
-// creates and Ethernet header
+// creates an Ethernet header
 void mkEthHeader(struct ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type) {
   rte_memcpy(&eth->d_addr, dst_mac, sizeof(struct ether_hdr));
   rte_memcpy(&eth->s_addr, src_mac, sizeof(struct ether_hdr));
   eth->ether_type = htons(ether_type);
 }
 
-// creates and IPv4 header
+// creates an IPv4 header
 void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, const uint32_t *dst_ip) {
   ip->version_ihl=0x45; // Version: 4, IHL: 20/4=5
   ip->type_of_service=0; 
@@ -660,7 +787,7 @@ void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, 
   // May NOT be set now, only after the UDP header checksum calculation: ip->hdr_checksum = rte_ipv4_cksum(ip);
 }
 
-// creates and UDP header
+// creates an UDP header
 void mkUdpHeader(struct udp_hdr *udp, uint16_t length, unsigned var_sport, unsigned var_dport) {
   udp->src_port =  htons(var_sport ? 0 : 0xC020); // set to 0 if source port number will change, otherwise RFC 2544 Test Frame format
   udp->dst_port =  htons(var_dport ? 0 : 0x0007); // set to 0 if destination port number will change, otherwise RFC 2544 Test Frame format
@@ -682,12 +809,13 @@ void mkData(uint8_t *data, uint16_t length) {
 }
 
 // creates an IPv6 Test Frame using several helper functions
+// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
 struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Test Frame
   if ( !pkt_mbuf )
-    rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the Test Frame! \n", side);
+    rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the IPv6 Test Frame! \n", side);
   length -=  ETHER_CRC_LEN; // exclude CRC from the frame length
   pkt_mbuf->pkt_len = pkt_mbuf->data_len = length; // set the length in both places
   uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); // Access the Test Frame in the message buffer
@@ -707,7 +835,7 @@ struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char
   return pkt_mbuf;
 }
 
-// creates and IPv6 header
+// creates an IPv6 header
 void mkIpv6Header(struct ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip) {
   ip->vtc_flow = htonl(0x60000000); // Version: 6, Traffic class: 0, Flow label: 0
   ip->payload_len = htons(length-sizeof(ipv6_hdr)); 
@@ -716,6 +844,33 @@ void mkIpv6Header(struct ipv6_hdr *ip, uint16_t length, const struct in6_addr *s
   rte_mov16((uint8_t *)&ip->src_addr,(uint8_t *)src_ip);
   rte_mov16((uint8_t *)&ip->dst_addr,(uint8_t *)dst_ip);
 }
+
+
+// creates an IPv4 Test Frame for (stateful) Resonder/sender: used with "Responder-ports 0"
+// BEHAVIOR: calls mkTestFrame4 and then sets the port numbers
+struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                              const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport) {
+  
+  struct rte_mbuf *pkt_mbuf=mkTestFrame4(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,1,1); // creates a test frame with 0 port numbers
+  // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
+  uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); 		// Access the Test Frame in the message buffer
+  uint16_t *udp_sport = (uint16_t *) (pkt + 34);	// Access to the source port field
+  uint16_t *udp_dport = (uint16_t *) (pkt + 36);	// Access to the destination port field
+  uint16_t *udp_chksum = (uint16_t *) (pkt + 40);	// Access to the checksum field
+  *udp_sport = sport;    		// set source port number -- with no htons()
+  *udp_dport = dport;			// set destination port number -- with no htons()
+  uint32_t chksum = ~*udp_chksum; 	// save the uncomplemented checksum value
+  chksum += sport;              	// add sport to checksum
+  chksum += dport;              	// add dport to checksum
+  chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+  chksum = (~chksum) & 0xffff;                                    // make one's complement
+  if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+  chksum = 0xffff;
+  *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+  return pkt_mbuf;
+}
+
 
 // sends Test Frames for throughput (or frame loss rate) measurement
 int send(void *par) {
@@ -831,6 +986,9 @@ int send(void *par) {
     } // end of optimized code for multiple destination networks
   } // end of optimized code for fixed port numbers
   else {
+
+  printf("%s : old sender is running, varport is on.\n", side, sent_frames);
+
     // implementation of varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
     // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
     if ( num_dest_nets == 1 ) {
@@ -912,40 +1070,34 @@ int send(void *par) {
         if ( var_sport ) {
           // sport is varying
           switch ( var_sport ) {
-            case 1:			// increasing port numbers
-              sp = sport++;
-              if ( sport == sport_max )
+            case 1:                   // increasing port numbers
+              if ( (sp=sport++) == sport_max )
                 sport = sport_min;
               break;
-            case 2:			// decreasing port numbers
-              sp = sport--;
-              if ( sport == sport_min )
+            case 2:                   // decreasing port numbers
+              if ( (sp=sport--) == sport_min )
                 sport = sport_max;
               break;
-            case 3:			// pseudorandom port numbers
+            case 3:                   // pseudorandom port numbers
               sp = uni_dis_sport(gen_sport);
           }
-          *udp_sport = htons(sp); 	// set source port 
-          chksum += sp;			// add to checksum
+          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
         }
         if ( var_dport ) {
           // dport is varying
           switch ( var_dport ) {
-            case 1:                   	// increasing port numbers
-              dp = dport++;
-              if ( dport == dport_max )
+            case 1:                           // increasing port numbers
+              if ( (dp=dport++) == dport_max )
                 dport = dport_min;
               break;
-            case 2:                   	// decreasing port numbers
-              dp = dport--;
-              if ( dport == dport_min )
+            case 2:                           // decreasing port numbers
+              if ( (dp=dport--) == dport_min )
                 dport = dport_max;
               break;
-            case 3:                   	// pseudorandom port numbers
+            case 3:                           // pseudorandom port numbers
               dp = uni_dis_dport(gen_dport);
           }
-          *udp_dport = htons(dp); 	// set destination port
-          chksum += dp;               	// add to checksum
+          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
         chksum = (~chksum) & 0xffff;                                  	// make one's complement
@@ -1058,40 +1210,34 @@ int send(void *par) {
         if ( var_sport ) {
           // sport is varying
           switch ( var_sport ) {
-            case 1:                     // increasing port numbers
-              sp = sport++;
-              if ( sport == sport_max )
+            case 1:                   // increasing port numbers
+              if ( (sp=sport++) == sport_max )
                 sport = sport_min;
               break;
-            case 2:                     // decreasing port numbers
-              sp = sport--;
-              if ( sport == sport_min )
+            case 2:                   // decreasing port numbers
+              if ( (sp=sport--) == sport_min )
                 sport = sport_max;
               break;
-            case 3:                     // pseudorandom port numbers
+            case 3:                   // pseudorandom port numbers
               sp = uni_dis_sport(gen_sport);
           }
-          *udp_sport = htons(sp);       // set source port
-          chksum += sp;                 // add to checksum
+          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
         }
         if ( var_dport ) {
           // dport is varying
           switch ( var_dport ) {
-            case 1:                     // increasing port numbers
-              dp = dport++;
-              if ( dport == dport_max )
+            case 1:                           // increasing port numbers
+              if ( (dp=dport++) == dport_max )
                 dport = dport_min;
               break;
-            case 2:                     // decreasing port numbers
-              dp = dport--;
-              if ( dport == dport_min )
+            case 2:                           // decreasing port numbers
+              if ( (dp=dport--) == dport_min )
                 dport = dport_max;
               break;
-            case 3:                     // pseudorandom port numbers
+            case 3:                           // pseudorandom port numbers
               dp = uni_dis_dport(gen_dport);
           }
-          *udp_dport = htons(dp);       // set destination port
-          chksum += dp;                 // add to checksum
+          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
         chksum = (~chksum) & 0xffff;                                    // make one's complement
@@ -1105,6 +1251,938 @@ int send(void *par) {
       } // this is the end of the sending cycle
     } // end of the optimized code for multiple destination networks
   } // end of implementation of varying port numbers 
+  // Now, we check the time
+  elapsed_seconds = (double)(rte_rdtsc()-start_tsc)/hz;
+  printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
+  if ( elapsed_seconds > duration*TOLERANCE )
+    rte_exit(EXIT_FAILURE, "%s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
+  printf("%s frames sent: %lu\n", side, sent_frames);
+
+  return 0;
+}
+
+// Initiator/Sender: sends Preliminary Frames or Test Frames for throughput (or frame loss rate) measurement
+int isend(void *par) {
+  // collecting input parameters:
+  class iSenderParameters *p = (class iSenderParameters *)par;
+  class senderCommonParameters *cp = p->cp;
+
+  // parameters directly correspond to the data members of class Throughput
+  uint16_t ipv6_frame_size = cp->ipv6_frame_size;
+  uint16_t ipv4_frame_size = cp->ipv4_frame_size;
+  uint32_t frame_rate = cp->frame_rate;
+  uint16_t duration = cp->duration;
+  uint32_t n = cp->n;
+  uint32_t m = cp->m;
+  uint64_t hz = cp->hz;
+  uint64_t start_tsc = cp->start_tsc;
+
+  // parameters which are different for the Left sender and the Right sender
+  int ip_version = p->ip_version;
+  rte_mempool *pkt_pool = p->pkt_pool;
+  uint8_t eth_id = p->eth_id;
+  const char *side = p->side;
+  struct ether_addr *dst_mac = p->dst_mac;
+  struct ether_addr *src_mac = p->src_mac;
+  uint16_t num_dest_nets = p->num_dest_nets;
+  uint32_t *src_ipv4 = p->src_ipv4;
+  uint32_t *dst_ipv4 = p->dst_ipv4;
+  struct in6_addr *src_ipv6 = p->src_ipv6;
+  struct in6_addr *dst_ipv6 = p->dst_ipv6;
+  struct in6_addr *src_bg= p->src_bg;
+  struct in6_addr *dst_bg = p->dst_bg;
+  unsigned var_sport = p->var_sport;
+  unsigned var_dport = p->var_dport;
+  uint16_t sport_min = p->sport_min;
+  uint16_t sport_max = p->sport_max;
+  uint16_t dport_min = p->dport_min;
+  uint16_t dport_max = p->dport_max;
+
+  unsigned enumerate_ports = p->enumerate_ports;
+
+  bool fg_frame;		// the current frame belongs to the foreground traffic: needed for port number enumerataion
+
+  // further local variables
+  uint64_t frames_to_send;
+  uint64_t sent_frames=0; 	// counts the number of sent frames
+  double elapsed_seconds; 	// for checking the elapsed seconds during sending
+
+  if ( duration ) 
+    frames_to_send = duration * frame_rate;	// calculate from duration for the real test
+  else
+    frames_to_send = p->pre_frames;		// use the specified value for sending preliminary frames
+
+  unsigned varport = var_sport || var_dport || enumerate_ports; // derived logical value: at least one port has to be changed?
+
+  if ( !varport ) {
+    // optimized code for using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4
+    if ( num_dest_nets == 1 ) { 	
+      // optimized code for single destination network: always the same foreground or background frame is sent, no arrays are used
+      struct rte_mbuf *fg_pkt_mbuf, *bg_pkt_mbuf; // message buffers for fg. and bg. Test Frames
+      // create foreground Test Frame
+      if ( ip_version == 4 )
+        fg_pkt_mbuf = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, 0, 0);
+      else  // IPv6
+        fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+  
+      // create backround Test Frame (always IPv6)
+      bg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
+  
+      // naive sender version: it is simple and fast
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); // Beware: an "empty" loop, and further two will come!
+        if ( sent_frames % n  < m )
+          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf, 1) ); // send foreground frame
+        else
+           while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf, 1) ); // send background frame
+      } // this is the end of the sending cycle
+    } // end of optimized code for single destination network
+    else {
+      // optimized code for multiple destination networks: foreground and background frames are generated for each network and pointers are stored in arrays
+      // assertion: num_dest_nets <= 256 
+      struct rte_mbuf *fg_pkt_mbuf[256], *bg_pkt_mbuf[256]; // message buffers for fg. and bg. Test Frames
+      uint32_t curr_dst_ipv4; 	// IPv4 destination address, which will be changed
+      in6_addr curr_dst_ipv6; 	// foreground IPv6 destination address, which will be changed
+      in6_addr curr_dst_bg; 	// backround IPv6 destination address, which will be changed
+      int i; 			// cycle variable for grenerating different destination network addresses
+      if ( ip_version == 4 )
+        curr_dst_ipv4 = *dst_ipv4;
+      else // IPv6
+        curr_dst_ipv6 = *dst_ipv6;
+      curr_dst_bg = *dst_bg;
+  
+      for ( i=0; i<num_dest_nets; i++ ) { 
+        // create foreground Test Frame
+        if ( ip_version == 4 ) {
+          ((uint8_t *)&curr_dst_ipv4)[2] = (uint8_t) i; // bits 16 to 23 of the IPv4 address are rewritten, like in 198.18.x.2
+          fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, &curr_dst_ipv4, 0, 0);
+        }
+        else { // IPv6
+          ((uint8_t *)&curr_dst_ipv6)[7] = (uint8_t) i; // bits 56 to 63 of the IPv6 address are rewritten, like in 2001:2:0:00xx::1
+          fg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, &curr_dst_ipv6, 0, 0);
+        } 
+        // create backround Test Frame (always IPv6)
+        ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
+        bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, 0, 0);
+      }
+   
+      // random number infrastructure is taken from: https://en.cppreference.com/w/cpp/numeric/random/uniform_int_distribution
+      // MT64 is used because of https://medium.com/@odarbelaeze/how-competitive-are-c-standard-random-number-generators-f3de98d973f0
+      // thread_local is used on the basis of https://stackoverflow.com/questions/40655814/is-mersenne-twister-thread-safe-for-cpp
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engine
+      thread_local std::mt19937_64 gen(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis(0, num_dest_nets-1);	// uniform distribution in [0, num_dest_nets-1]
+  
+      // naive sender version: it is simple and fast
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        int index = uni_dis(gen);	// index of the pre-generated frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); // Beware: an "empty" loop, and further two will come!
+        if ( sent_frames % n  < m )
+          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[index], 1) ); // send foreground frame
+        else
+           while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[index], 1) ); // send background frame
+      } // this is the end of the sending cycle
+    } // end of optimized code for multiple destination networks
+  } // end of optimized code for fixed port numbers
+  else {
+    // implementation of varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
+    // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
+    if ( num_dest_nets == 1 ) {
+      // optimized code for single destination network: always one of the same N pre-prepared foreground or background frames is updated and sent, 
+      // source and/or destination port number(s) and UDP checksum are updated
+      // N size arrays are used to resolve the write after send problem
+      int i; // cycle variable for the above mentioned purpose: takes {0..N-1} values
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N], *pkt_mbuf; // pointers of message buffers for fg. and bg. Test Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N], *bg_udp_sport[N], *bg_udp_dport[N], *bg_udp_chksum[N]; // pointers to the given fields
+      uint16_t *udp_sport, *udp_dport, *udp_chksum; // working pointers to the given fields
+      uint16_t fg_udp_chksum_start, bg_udp_chksum_start;  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done 
+      uint16_t e_sport, e_dport; // values of source and destination port numbers -- to be preserved, used for port enumeration of foreground traffic
+      uint16_t sp, dp; // values of source and destination port numbers -- temporary values
+      
+      for ( i=0; i<N; i++ ) {
+        // create foreground Test Frame
+        if ( ip_version == 4 ) {
+          fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+          fg_udp_sport[i] = pkt + 34;
+          fg_udp_dport[i] = pkt + 36;
+          fg_udp_chksum[i] = pkt + 40;
+        } else { // IPv6
+          fg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+          fg_udp_sport[i] = pkt + 54;
+          fg_udp_dport[i] = pkt + 56;
+          fg_udp_chksum[i] = pkt + 60;
+        }
+        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+        // create backround Test Frame (always IPv6)
+        bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
+        pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+        bg_udp_sport[i] = pkt + 54;
+        bg_udp_dport[i] = pkt  + 56;
+        bg_udp_chksum[i] = pkt + 60;
+        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+      } 
+
+      // set the starting values of port numbers, if they are increased or decreased
+      if ( enumerate_ports ) {
+        e_sport = sport_min;
+        e_dport = dport_min;
+      } 
+      if ( var_sport == 1 )
+        sport = sport_min; 
+      if ( var_sport == 2 )
+        sport = sport_max;
+      if ( var_dport == 1 )
+        dport = dport_min; 
+      if ( var_dport == 2 )
+        dport = dport_max;
+
+      // prepare random number infrastructure
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engines
+      thread_local std::mt19937_64 gen_sport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_dport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_sport(sport_min, sport_max);	// uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<int> uni_dis_dport(dport_min, dport_max);	// uniform distribution in [sport_min, sport_max]
+
+      // naive sender version: it is simple and fast
+      i=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          chksum = fg_udp_chksum_start;
+          udp_sport = (uint16_t *)fg_udp_sport[i];
+          udp_dport = (uint16_t *)fg_udp_dport[i];
+          udp_chksum = (uint16_t *)fg_udp_chksum[i];
+          pkt_mbuf = fg_pkt_mbuf[i];
+	  fg_frame = 1;  	// used only, when port enumeration is done, but always set to aviod a branch instruction
+        } else {
+          // background frame is to be sent
+          chksum = bg_udp_chksum_start;
+          udp_sport = (uint16_t *)bg_udp_sport[i];
+          udp_dport = (uint16_t *)bg_udp_dport[i];
+          udp_chksum = (uint16_t *)bg_udp_chksum[i];
+          pkt_mbuf = bg_pkt_mbuf[i];
+	  fg_frame = 0;  	// used only, when port enumeration is done, but always set to aviod a branch instruction
+        }
+        // from here, we need to handle the frame identified by the temprary variables
+        if ( enumerate_ports && fg_frame ) {
+	  // port numbers are enumerated: sport is the low order counter, dport is the high order counter
+	  if ( (sp=e_sport++) == sport_max ) {
+            e_sport = sport_min;
+            if ( (dp=e_dport++) == dport_max )
+               e_dport = dport_min;
+          } else 
+            dp = e_dport;
+          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+        } else {
+ 	  // port numbers are handled as before
+          if ( var_sport ) {
+            // sport is varying
+            switch ( var_sport ) {
+              case 1:			// increasing port numbers
+                if ( (sp=sport++) == sport_max )
+                  sport = sport_min;
+                break;
+              case 2:			// decreasing port numbers
+                if ( (sp=sport--) == sport_min )
+                  sport = sport_max;
+                break;
+              case 3:			// pseudorandom port numbers
+                sp = uni_dis_sport(gen_sport);
+            }
+            chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+          }
+          if ( var_dport ) {
+            // dport is varying
+            switch ( var_dport ) {
+              case 1:                   	// increasing port numbers
+                if ( (dp=dport++) == dport_max )
+                  dport = dport_min;
+                break;
+              case 2:                   	// decreasing port numbers
+                if ( (dp=dport--) == dport_min )
+                  dport = dport_max;
+                break;
+              case 3:                   	// pseudorandom port numbers
+                dp = uni_dis_dport(gen_dport);
+            }
+            chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+          }
+        }
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+        chksum = (~chksum) & 0xffff;                                  	// make one's complement
+        if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+        // finally, when its time is here, send the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) ); 		// send out the frame
+        i = (i+1) % N;
+      } // this is the end of the sending cycle
+    } // end of optimized code for single destination network
+    else { 
+      // optimized code for multiple destination networks: N copies of foreground or background frames are prepared for each destination network,
+      // N size arrays are used to resolve the write after send problem
+      // source and/or destination port number(s) and UDP checksum are updated in the actually used copy before sending
+      // assertion: num_dest_nets <= 256
+      int j; // cycle variable to index the N size array: takes {0..N-1} values
+      struct rte_mbuf *fg_pkt_mbuf[256][N], *bg_pkt_mbuf[256][N], *pkt_mbuf; // pointers of message buffers for fg. and bg. Test Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_sport[256][N], *fg_udp_dport[256][N], *fg_udp_chksum[256][N]; // pointers to the given fields of the pre-prepared Test Frames
+      uint8_t *bg_udp_sport[256][N], *bg_udp_dport[256][N], *bg_udp_chksum[256][N]; // pointers to the given fields of the pre-prepared Test Frames
+      uint16_t *udp_sport, *udp_dport, *udp_chksum; // working pointers to the given fields
+      uint16_t fg_udp_chksum_start[256], bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done
+      uint16_t sp, dp; // values of source and destination port numbers -- temporary values
+      uint32_t curr_dst_ipv4;     // IPv4 destination address, which will be changed
+      in6_addr curr_dst_ipv6;     // foreground IPv6 destination address, which will be changed
+      in6_addr curr_dst_bg;       // backround IPv6 destination address, which will be changed
+      int i;                      // cycle variable for grenerating different destination network addresses
+ 
+      if ( ip_version == 4 )
+        curr_dst_ipv4 = *dst_ipv4;
+      else // IPv6
+        curr_dst_ipv6 = *dst_ipv6;
+      curr_dst_bg = *dst_bg;
+
+      // create Test Frames
+      for ( j=0; j<N; j++ ) {
+        for ( i=0; i<num_dest_nets; i++ ) {
+          // create foreground Test Frame (IPv4 or IPv6)
+          if ( ip_version == 4 ) {
+            ((uint8_t *)&curr_dst_ipv4)[2] = (uint8_t) i; // bits 16 to 23 of the IPv4 address are rewritten, like in 198.18.x.2
+            fg_pkt_mbuf[i][j] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, &curr_dst_ipv4, var_sport, var_dport);
+            pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the Test Frame in the message buffer
+            fg_udp_sport[i][j] = pkt + 34;
+            fg_udp_dport[i][j] = pkt + 36;
+            fg_udp_chksum[i][j] = pkt + 40;
+          } else { // IPv6
+            ((uint8_t *)&curr_dst_ipv6)[7] = (uint8_t) i; // bits 56 to 63 of the IPv6 address are rewritten, like in 2001:2:0:00xx::1
+            fg_pkt_mbuf[i][j] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, &curr_dst_ipv6, var_sport, var_dport);
+            pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i][j], uint8_t *); // Access the Test Frame in the message buffer
+            fg_udp_sport[i][j] = pkt + 54;
+            fg_udp_dport[i][j] = pkt + 56;
+            fg_udp_chksum[i][j] = pkt + 60;
+          }
+          fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          // create backround Test Frame (always IPv6)
+          ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
+          bg_pkt_mbuf[i][j] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i][j], uint8_t *); // Access the Test Frame in the message buffer
+          bg_udp_sport[i][j] = pkt + 54;
+          bg_udp_dport[i][j] = pkt  + 56;
+          bg_udp_chksum[i][j] = pkt + 60;
+          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+        }
+      }
+
+      // set the starting values of port numbers, if they are increased or decreased
+      if ( var_sport == 1 )
+        sport = sport_min;
+      if ( var_sport == 2 )
+        sport = sport_max;
+      if ( var_dport == 1 )
+        dport = dport_min;
+      if ( var_dport == 2 )
+        dport = dport_max;
+
+      // prepare random number infrastructure
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engines
+      thread_local std::mt19937_64 gen_net(rd()); //Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_sport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_dport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_net(0, num_dest_nets-1);     // uniform distribution in [0, num_dest_nets-1]
+      std::uniform_int_distribution<int> uni_dis_sport(sport_min, sport_max);   // uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<int> uni_dis_dport(dport_min, dport_max);   // uniform distribution in [sport_min, sport_max]
+
+      // naive sender version: it is simple and fast
+      j=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        int index = uni_dis_net(gen_net); // index of the pre-generated Test Frame for the given destination network
+        // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          chksum = fg_udp_chksum_start[index];
+          udp_sport = (uint16_t *)fg_udp_sport[index][j];
+          udp_dport = (uint16_t *)fg_udp_dport[index][j];
+          udp_chksum = (uint16_t *)fg_udp_chksum[index][j];
+          pkt_mbuf = fg_pkt_mbuf[index][j];
+        } else {
+          // background frame is to be sent
+          chksum = bg_udp_chksum_start[index];
+          udp_sport = (uint16_t *)bg_udp_sport[index][j];
+          udp_dport = (uint16_t *)bg_udp_dport[index][j];
+          udp_chksum = (uint16_t *)bg_udp_chksum[index][j];
+          pkt_mbuf = bg_pkt_mbuf[index][j];
+        }
+        // from here, we need to handle the frame identified by the temprary variables
+        if ( var_sport ) {
+          // sport is varying
+          switch ( var_sport ) {
+            case 1:                   // increasing port numbers
+              if ( (sp=sport++) == sport_max )
+                sport = sport_min;
+              break;
+            case 2:                   // decreasing port numbers
+              if ( (sp=sport--) == sport_min )
+                sport = sport_max;
+              break;
+            case 3:                   // pseudorandom port numbers
+              sp = uni_dis_sport(gen_sport);
+          }
+          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+        }
+        if ( var_dport ) {
+          // dport is varying
+          switch ( var_dport ) {
+            case 1:                           // increasing port numbers
+              if ( (dp=dport++) == dport_max )
+                dport = dport_min;
+              break;
+            case 2:                           // decreasing port numbers
+              if ( (dp=dport--) == dport_min )
+                dport = dport_max;
+              break;
+            case 3:                           // pseudorandom port numbers
+              dp = uni_dis_dport(gen_dport);
+          }
+          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+        }
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = (~chksum) & 0xffff;                                    // make one's complement
+        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+        // finally, when its time is here, send the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    // Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );           // send out the frame
+        j = (j+1) % N;
+      } // this is the end of the sending cycle
+    } // end of the optimized code for multiple destination networks
+  } // end of implementation of varying port numbers 
+  uint64_t elapsed_tsc = rte_rdtsc()-start_tsc;
+  // Now, we check the time
+  if ( duration ) {
+    elapsed_seconds = (double)elapsed_tsc/hz;
+    printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
+    if ( elapsed_seconds > duration*TOLERANCE )
+      rte_exit(EXIT_FAILURE, "%s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
+  }
+  else // this is a preliminary test, duration is not valid
+  {
+    if ( elapsed_tsc > hz*frames_to_send/frame_rate*TOLERANCE )
+      rte_exit(EXIT_FAILURE, "%s sending was too slow (only %3.10lf percent of required rate), the test is invalid.\n", side,
+               100.0*frames_to_send/elapsed_tsc*hz/frame_rate);
+  }
+
+  printf("%s frames sent: %lu\n", side, sent_frames);
+
+  return 0;
+}
+
+// Responder/Sender: sends Test Frames for throughput (or frame loss rate) measurement
+int rsend(void *par) {
+  // collecting input parameters:
+  class rSenderParameters *p = (class rSenderParameters *)par;
+  class senderCommonParameters *cp = p->cp;
+
+  // parameters directly correspond to the data members of class Throughput
+  uint16_t ipv6_frame_size = cp->ipv6_frame_size;
+  uint16_t ipv4_frame_size = cp->ipv4_frame_size;
+  uint32_t frame_rate = cp->frame_rate;
+  uint16_t duration = cp->duration;
+  uint32_t n = cp->n;
+  uint32_t m = cp->m;
+  uint64_t hz = cp->hz;
+  uint64_t start_tsc = cp->start_tsc;
+
+  // parameters which are different for the Left sender and the Right sender
+  int ip_version = p->ip_version;
+  rte_mempool *pkt_pool = p->pkt_pool;
+  uint8_t eth_id = p->eth_id;
+  const char *side = p->side;
+  struct ether_addr *dst_mac = p->dst_mac;
+  struct ether_addr *src_mac = p->src_mac;
+  uint16_t num_dest_nets = p->num_dest_nets;
+  uint32_t *src_ipv4 = p->src_ipv4;
+  uint32_t *dst_ipv4 = p->dst_ipv4;
+  struct in6_addr *src_ipv6 = p->src_ipv6;
+  struct in6_addr *dst_ipv6 = p->dst_ipv6;
+  struct in6_addr *src_bg= p->src_bg;
+  struct in6_addr *dst_bg = p->dst_bg;
+  unsigned var_sport = p->var_sport;
+  unsigned var_dport = p->var_dport;
+  unsigned varport = var_sport || var_dport; // derived logical value: at least one port has to be changed?
+  uint16_t sport_min = p->sport_min;
+  uint16_t sport_max = p->sport_max;
+  uint16_t dport_min = p->dport_min;
+  uint16_t dport_max = p->dport_max;
+
+  unsigned state_table_size = p->state_table_size;
+  atomicFourTuple *stateTable = p->stateTable;
+  unsigned responder_ports = p->responder_ports;
+
+  // further local variables
+  uint64_t frames_to_send = duration * frame_rate;	// Each active sender sends this number of frames
+  uint64_t sent_frames=0; // counts the number of sent frames
+  double elapsed_seconds; // for checking the elapsed seconds during sending
+
+  unsigned index;   	// current state table index for reading a 4-tuple (used when 'responder-ports' is 1 or 2)
+  fourTuple ft;		// 4-tuple is read from the state table into this 
+  bool fg_frame;   	// the current frame belongs to the foreground traffic: will be handled in a stateful way (if it is IPv4)
+
+  if ( !responder_ports ) {
+    // optimized code for using a single 4-tuple taken from the very first preliminary frame (as foreground traffic)
+    // ( similar to using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4 )
+    ft=stateTable[0];	// read only once
+    if ( num_dest_nets == 1 ) { 	
+      // optimized code for single destination network: always the same foreground or background frame is sent, no arrays are used
+      struct rte_mbuf *fg_pkt_mbuf, *bg_pkt_mbuf; // message buffers for fg. and bg. Test Frames
+      // create foreground Test Frame
+      if ( ip_version == 4 )
+        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port);
+      else  // IPv6 -- stateful operation is not yet supported!
+        fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+  
+      // create backround Test Frame (always IPv6)
+      bg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
+  
+      // naive sender version: it is simple and fast
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); // Beware: an "empty" loop, and further two will come!
+        if ( sent_frames % n  < m )
+          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf, 1) ); // send foreground frame
+        else
+           while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf, 1) ); // send background frame
+      } // this is the end of the sending cycle
+    } // end of optimized code for single destination network
+    else {
+      // optimized code for multiple destination networks -- only regarding background traffic! 
+      // always the same foreground frame is sent!
+      // background frames are generated for each network and pointers are stored in arrays
+      // assertion: num_dest_nets <= 256 
+      struct rte_mbuf *fg_pkt_mbuf, *bg_pkt_mbuf[256]; // message buffers for fg. and bg. Test Frames
+      in6_addr curr_dst_bg; 	// backround IPv6 destination address, which will be changed
+      int i; 			// cycle variable for grenerating different destination network addresses
+
+      curr_dst_bg = *dst_bg;
+  
+      // create foreground Test Frame
+      if ( ip_version == 4 ) {
+        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port);
+      }
+      else { // IPv6 -- stateful operation is not yet supported!
+        fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+      } 
+
+      for ( i=0; i<num_dest_nets; i++ ) { 
+        // create backround Test Frames (always IPv6)
+        ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
+        bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, 0, 0);
+      }
+   
+      // random number infrastructure is taken from: https://en.cppreference.com/w/cpp/numeric/random/uniform_int_distribution
+      // MT64 is used because of https://medium.com/@odarbelaeze/how-competitive-are-c-standard-random-number-generators-f3de98d973f0
+      // thread_local is used on the basis of https://stackoverflow.com/questions/40655814/is-mersenne-twister-thread-safe-for-cpp
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engine
+      thread_local std::mt19937_64 gen(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_net(0, num_dest_nets-1);	// uniform distribution in [0, num_dest_nets-1]
+  
+      // naive sender version: it is simple and fast
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); // Beware: an "empty" loop, and further two will come!
+        if ( sent_frames % n  < m )
+          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf, 1) ); // send foreground frame
+        else {
+          int net_index = uni_dis_net(gen);	// index of the pre-generated frame
+          while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[net_index], 1) ); // send background frame
+	}
+      } // this is the end of the sending cycle
+    } // end of optimized code for multiple destination networks
+  } // end of optimized code for fixed port numbers
+  else {
+    // responder-port values of 1, 2 and 3 are handled together here
+    // 1: index for reading four tuple is increased from 0 to state_table_size-1
+    // 2: index for reading four tuple is decreases from state_table_size-1 to 0
+    // 3: index for reading four tuple is pseudorandom in the range of [0, state_table_size-1]
+    // 3 is believed to be the best implementation of RFC 4814 pseudorandom port numbers for stateful tests, 
+    // increasing and decreasing ones are our additional, non-stantard, computationally cheaper solutions 
+    if ( responder_ports == 1 )
+      index = 0;
+    else if ( responder_ports == 2 )
+      index = state_table_size-1;
+    uint32_t ipv4_zero = 0;	// IPv4 address 0.0.0.0 used as a placeholder for UDP checksum calculation (value will be set later)
+    if ( num_dest_nets == 1 ) {
+      // optimized code for single destination network: always one of the same N pre-prepared foreground or background frames is updated and sent, 
+      // N size arrays are used to resolve the write after send problem.
+      // IPv4 addresses, source and/or destination port number(s) and UDP checksum are updated in the actually used copy.
+      int i; // cycle variable for the above mentioned purpose: takes {0..N-1} values
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N], *pkt_mbuf; // pointers of message buffers for fg. and bg. Test Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N], *bg_udp_sport[N], *bg_udp_dport[N], *bg_udp_chksum[N]; // pointers to the given fields
+      uint8_t *fg_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests
+      ipv4_hdr *ipv4_hdr_start; // used for IPv4 header checksum calculation
+      uint16_t *udp_sport, *udp_dport, *udp_chksum, *ipv4_chksum; // working pointers to the given fields
+      uint32_t *ipv4_src, *ipv4_dst; // further ones for stateful tests
+      uint16_t fg_udp_chksum_start, bg_udp_chksum_start;  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done 
+      uint16_t sp, dp; // values of source and destination port numbers -- temporary values
+      
+      for ( i=0; i<N; i++ ) {
+        // create foreground Test Frame
+        if ( ip_version == 4 ) {
+	  // All IPv4 addresses and port numbers are set to 0.
+          fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+	  fg_ipv4_hdr[i] = pkt + 14;
+          fg_ipv4_chksum[i] = pkt + 24;
+          fg_ipv4_src[i] = pkt + 26;
+          fg_ipv4_dst[i] = pkt + 30;
+          fg_udp_sport[i] = pkt + 34;
+          fg_udp_dport[i] = pkt + 36;
+          fg_udp_chksum[i] = pkt + 40;
+        } else { // IPv6 -- stateful operation is not yet supported!
+          fg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+          fg_udp_sport[i] = pkt + 54;
+          fg_udp_dport[i] = pkt + 56;
+          fg_udp_chksum[i] = pkt + 60;
+        }
+        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+        // create backround Test Frame (always IPv6)
+        bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
+        pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
+        bg_udp_sport[i] = pkt + 54;
+        bg_udp_dport[i] = pkt  + 56;
+        bg_udp_chksum[i] = pkt + 60;
+        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+      } 
+
+      // set the starting values of port numbers, if they are increased or decreased
+      if ( var_sport == 1 )
+        sport = sport_min; 
+      if ( var_sport == 2 )
+        sport = sport_max;
+      if ( var_dport == 1 )
+        dport = dport_min; 
+      if ( var_dport == 2 )
+        dport = dport_max;
+
+      // prepare random number infrastructure
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engines
+      thread_local std::mt19937_64 gen_sport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_dport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_index(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_sport(sport_min, sport_max);	// uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<int> uni_dis_dport(dport_min, dport_max);	// uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<unsigned> uni_dis_index(0, state_table_size-1); // uniform distribution in [0, state_table_size-1]
+
+      // naive sender version: it is simple and fast
+      i=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          chksum = fg_udp_chksum_start;
+          udp_sport = (uint16_t *)fg_udp_sport[i];
+          udp_dport = (uint16_t *)fg_udp_dport[i];
+          udp_chksum = (uint16_t *)fg_udp_chksum[i];
+	  ipv4_hdr_start = (ipv4_hdr *)fg_ipv4_hdr[i];
+	  ipv4_chksum = (uint16_t *) fg_ipv4_chksum[i];
+	  ipv4_src = (uint32_t *)fg_ipv4_src[i];	// this is rubbish if IP version is 6
+	  ipv4_dst = (uint32_t *)fg_ipv4_dst[i];	// this is rubbish if IP version is 6 
+          pkt_mbuf = fg_pkt_mbuf[i];
+	  fg_frame = 1;
+        } else {
+          // background frame is to be sent
+          chksum = bg_udp_chksum_start;
+          udp_sport = (uint16_t *)bg_udp_sport[i];
+          udp_dport = (uint16_t *)bg_udp_dport[i];
+          udp_chksum = (uint16_t *)bg_udp_chksum[i];
+          pkt_mbuf = bg_pkt_mbuf[i];
+	  fg_frame = 0;
+        }
+        // from here, we need to handle the frame identified by the temprary variables
+        if ( ip_version == 4 && fg_frame ) {
+	  // this frame is handled in a stateful way
+	  switch ( responder_ports ) { 			// here, it is surely not 0
+	    case 1:
+	      ft=stateTable[index++];
+	      index = index % state_table_size;
+	      break;
+	    case 2:
+	      ft=stateTable[index];
+	      if ( unlikely ( !index ) )
+		index=state_table_size-1;
+	      else
+		index--;
+	      break;
+	    case 3:
+	      ft=stateTable[uni_dis_index(gen_index)];
+	      break;
+	  }
+	  // now we set the IPv4 addresses and port numbers in the currently used template
+          // without using conversion from host byte order to network byte order
+	  *ipv4_src = ft.resp_addr;
+	  *ipv4_dst = ft.init_addr;
+	  *udp_sport = ft.resp_port;
+	  *udp_dport = ft.init_port;
+	  // calculate checksum....
+	  chksum += rte_raw_cksum(&ft,12);				
+	  chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);	// reduce to 32 bits
+	  chksum = (~chksum) & 0xffff;                                  // make one's complement
+	  if (chksum == 0)                                              // checksum should not be 0 (0 means, no checksum is used)
+	    chksum = 0xffff;
+	  *udp_chksum = (uint16_t) chksum;            	// set checksum in the frame
+	  *ipv4_chksum = 0;        			// IPv4 header checksum is set to 0
+	  *ipv4_chksum = rte_ipv4_cksum(ipv4_hdr_start);        // IPv4 header checksum is set now
+	  // this is the end of handling the frame in a stateful way
+	} else {
+	  // this frame is handled in the old way
+          if ( var_sport ) {
+            // sport is varying
+            switch ( var_sport ) {
+              case 1:                   // increasing port numbers
+                if ( (sp=sport++) == sport_max )
+                  sport = sport_min;
+                break;
+              case 2:                   // decreasing port numbers
+                if ( (sp=sport--) == sport_min )
+                  sport = sport_max;
+                break;
+              case 3:                   // pseudorandom port numbers
+                sp = uni_dis_sport(gen_sport);
+            }
+            chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+          }
+          if ( var_dport ) {
+            // dport is varying
+            switch ( var_dport ) {
+              case 1:                           // increasing port numbers
+                if ( (dp=dport++) == dport_max )
+                  dport = dport_min;
+                break;
+              case 2:                           // decreasing port numbers
+                if ( (dp=dport--) == dport_min )
+                  dport = dport_max;
+                break;
+              case 3:                           // pseudorandom port numbers
+                dp = uni_dis_dport(gen_dport);
+            }
+            chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+          }
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+          chksum = (~chksum) & 0xffff;                                  	// make one's complement
+          if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+            chksum = 0xffff;
+          *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+  	  // this is the end of handling the frame in the old way
+	}
+
+        // finally, when its time is here, send the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) ); 		// send out the frame
+        i = (i+1) % N;
+      } // this is the end of the sending cycle
+    } // end of optimized code for single destination network
+    else { 
+      // optimized code for multiple destination networks:
+      // N copies of foreground frames are prepared, and N cpopies of background frames for each destination network are prepared,
+      // N size arrays are used to resolve the write after send problem
+      // IPv4 addresses, source and/or destination port number(s) and UDP checksum are updated in the actually used copy before sending
+      // assertion: num_dest_nets <= 256
+      int j; // cycle variable to index the N size array: takes {0..N-1} values
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[256][N], *pkt_mbuf; // pointers of message buffers for fg. and bg. Test Frames
+      uint8_t *pkt; // working pointer to the current frame (in the message buffer)
+      uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N]; // pointers to the given fields of the pre-prepared Test Frames
+      uint8_t *bg_udp_sport[256][N], *bg_udp_dport[256][N], *bg_udp_chksum[256][N]; // pointers to the given fields of the pre-prepared Test Frames
+      uint8_t *fg_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests, but not per dest. networks!
+      ipv4_hdr *ipv4_hdr_start; // used for IPv4 header checksum calculation
+      uint16_t *udp_sport, *udp_dport, *udp_chksum, *ipv4_chksum; // working pointers to the given fields
+      uint32_t *ipv4_src, *ipv4_dst; // further ones for stateful tests
+      uint16_t fg_udp_chksum_start, bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
+      uint32_t chksum; // temporary variable for shecksum calculation
+      uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done
+      uint16_t sp, dp; // values of source and destination port numbers -- temporary values
+      in6_addr curr_dst_bg;       // backround IPv6 destination address, which will be changed
+      int i;                      // cycle variable for grenerating different destination network addresses
+ 
+      curr_dst_bg = *dst_bg;
+
+      // create Test Frames
+      for ( j=0; j<N; j++ ) {
+        // create foreground Test Frame (IPv4 or IPv6)
+        if ( ip_version == 4 ) {
+          fg_pkt_mbuf[j] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[j], uint8_t *); // Access the Test Frame in the message buffer
+          fg_ipv4_hdr[j] = pkt + 14;
+          fg_ipv4_chksum[j] = pkt + 24;
+          fg_ipv4_src[j] = pkt + 26;
+          fg_ipv4_dst[j] = pkt + 30;
+          fg_udp_sport[j] = pkt + 34;
+          fg_udp_dport[j] = pkt + 36;
+          fg_udp_chksum[j] = pkt + 40;
+        } else { // IPv6 -- stateful operation is not yet supported!
+          fg_pkt_mbuf[j] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[j], uint8_t *); // Access the Test Frame in the message buffer
+          fg_udp_sport[j] = pkt + 54;
+          fg_udp_dport[j] = pkt + 56;
+          fg_udp_chksum[j] = pkt + 60;
+        }
+        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[j]; // save the uncomplemented checksum value (same for all values of "j")
+
+        // create backround Test Frames for all destination networks (always IPv6)
+        for ( i=0; i<num_dest_nets; i++ ) {
+          ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
+          bg_pkt_mbuf[i][j] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, var_sport, var_dport);
+          pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i][j], uint8_t *); // Access the Test Frame in the message buffer
+          bg_udp_sport[i][j] = pkt + 54;
+          bg_udp_dport[i][j] = pkt  + 56;
+          bg_udp_chksum[i][j] = pkt + 60;
+          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+        }
+      }
+
+      // set the starting values of port numbers, if they are increased or decreased
+      if ( var_sport == 1 )
+        sport = sport_min;
+      if ( var_sport == 2 )
+        sport = sport_max;
+      if ( var_dport == 1 )
+        dport = dport_min;
+      if ( var_dport == 2 )
+        dport = dport_max;
+
+      // prepare random number infrastructure
+      thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engines
+      thread_local std::mt19937_64 gen_net(rd()); //Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_sport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_dport(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      thread_local std::mt19937_64 gen_index(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+      std::uniform_int_distribution<int> uni_dis_net(0, num_dest_nets-1);     // uniform distribution in [0, num_dest_nets-1]
+      std::uniform_int_distribution<int> uni_dis_sport(sport_min, sport_max);   // uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<int> uni_dis_dport(dport_min, dport_max);   // uniform distribution in [sport_min, sport_max]
+      std::uniform_int_distribution<unsigned> uni_dis_index(0, state_table_size-1); // uniform distribution in [0, state_table_size-1]
+
+      // naive sender version: it is simple and fast
+      j=0; // increase maunally after each sending
+      for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
+        // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
+        if ( sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          chksum = fg_udp_chksum_start;
+          udp_sport = (uint16_t *)fg_udp_sport[j];
+          udp_dport = (uint16_t *)fg_udp_dport[j];
+          udp_chksum = (uint16_t *)fg_udp_chksum[j];
+          ipv4_hdr_start = (ipv4_hdr *)fg_ipv4_hdr[j];
+          ipv4_chksum = (uint16_t *) fg_ipv4_chksum[j];
+          ipv4_src = (uint32_t *)fg_ipv4_src[j];        // this is rubbish if IP version is 6
+          ipv4_dst = (uint32_t *)fg_ipv4_dst[j];        // this is rubbish if IP version is 6
+          pkt_mbuf = fg_pkt_mbuf[j];
+          fg_frame = 1;
+        } else {
+          // background frame is to be sent
+          int net_index = uni_dis_net(gen_net); // index of the pre-generated Test Frame for the given destination network
+          chksum = bg_udp_chksum_start[net_index];
+          udp_sport = (uint16_t *)bg_udp_sport[net_index][j];
+          udp_dport = (uint16_t *)bg_udp_dport[net_index][j];
+          udp_chksum = (uint16_t *)bg_udp_chksum[net_index][j];
+          pkt_mbuf = bg_pkt_mbuf[net_index][j];
+          fg_frame = 0;
+        }
+        // from here, we need to handle the frame identified by the temprary variables
+        if ( ip_version == 4 && fg_frame ) {
+          // this frame is handled in a stateful way
+          switch ( responder_ports ) {                  // here, it is surely not 0
+            case 1:
+              ft=stateTable[index++];
+              index = index % state_table_size;
+              break;
+            case 2:
+              ft=stateTable[index];
+              if ( unlikely ( !index ) )
+                index=state_table_size-1;
+              else
+                index--;
+              break;
+            case 3:
+              ft=stateTable[uni_dis_index(gen_index)];
+              break;
+          }
+          // now we set the IPv4 addresses and port numbers in the currently used template
+          // without using conversion from host byte order to network byte order
+          *ipv4_src = ft.resp_addr;
+          *ipv4_dst = ft.init_addr;
+          *udp_sport = ft.resp_port;
+          *udp_dport = ft.init_port;
+          // calculate checksum....
+          chksum += rte_raw_cksum(&ft,12);
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // reduce to 32 bits
+          chksum = (~chksum) & 0xffff;                                  // make one's complement
+          if (chksum == 0)                                              // checksum should not be 0 (0 means, no checksum is used)
+            chksum = 0xffff;
+          *udp_chksum = (uint16_t) chksum;              // set checksum in the frame
+          *ipv4_chksum = 0;                             // IPv4 header checksum is set to 0
+          *ipv4_chksum = rte_ipv4_cksum(ipv4_hdr_start);        // IPv4 header checksum is set now
+          // this is the end of handling the frame in a stateful way
+        } else {
+          // this frame is handled in the old way
+          if ( var_sport ) {
+            // sport is varying
+            switch ( var_sport ) {
+              case 1:                   // increasing port numbers
+                if ( (sp=sport++) == sport_max )
+                  sport = sport_min;
+                break;
+              case 2:                   // decreasing port numbers
+                if ( (sp=sport--) == sport_min )
+                  sport = sport_max;
+                break;
+              case 3:                   // pseudorandom port numbers
+                sp = uni_dis_sport(gen_sport);
+            }
+            chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+          }
+          if ( var_dport ) {
+            // dport is varying
+            switch ( var_dport ) {
+              case 1:                           // increasing port numbers
+                if ( (dp=dport++) == dport_max )
+                  dport = dport_min;
+                break;
+              case 2:                           // decreasing port numbers
+                if ( (dp=dport--) == dport_min )
+                  dport = dport_max;
+                break;
+              case 3:                           // pseudorandom port numbers
+                dp = uni_dis_dport(gen_dport);
+            }
+            chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+          }
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+          chksum = (~chksum) & 0xffff;                                    // make one's complement
+          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+            chksum = 0xffff;
+          *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+          // this is the end of handling the frame in the old way
+	}
+
+        // finally, when its time is here, send the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    // Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );           // send out the frame
+        j = (j+1) % N;
+      } // this is the end of the sending cycle
+    } // end of the optimized code for multiple destination networks
+  } // end of implementation of varying port numbers 
+
   // Now, we check the time
   elapsed_seconds = (double)(rte_rdtsc()-start_tsc)/hz;
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
@@ -1156,71 +2234,357 @@ int receive(void *par) {
   return received;
 }
 
+// Responder/Receiver: receives Preliminary or Test Frames for throughput (or frame loss rate) measurement
+// Offsets from the start of the Ethernet Frame:
+// EtherType: 6+6=12
+// IPv6 Next header: 14+6=20, UDP Data for IPv6: 14+40+8=62
+// IPv4 Protocol: 14+9=23, UDP Data for IPv4: 14+20+8=42
+int rreceive(void *par) {
+  // collecting input parameters:
+  class rReceiverParameters *p = (class rReceiverParameters *)par;
+  uint64_t finish_receiving = p->finish_receiving;
+  uint8_t eth_id = p->eth_id;
+  const char *side = p->side;
+  unsigned state_table_size = p->state_table_size;
+  unsigned *valid_entries = p->valid_entries;
+  atomicFourTuple **stateTable = p->stateTable;
+
+  atomicFourTuple *stTbl;		// state table 
+  unsigned index = 0; 			// state table index: first write will happen to this position
+  fourTuple four_tuple;			// 4-tuple for collecting IPv4 addresses and port numbers
+
+  // further local variables
+  int frames, i;
+  struct rte_mbuf *pkt_mbufs[MAX_PKT_BURST]; // pointers for the mbufs of received frames
+  uint16_t ipv4=htons(0x0800); // EtherType for IPv4 in Network Byte Order
+  uint16_t ipv6=htons(0x86DD); // EtherType for IPv6 in Network Byte Order
+  uint8_t identify[8]= { 'I', 'D', 'E', 'N', 'T', 'I', 'F', 'Y' };	// Identificion of the Test Frames
+  uint64_t *id=(uint64_t *) identify;
+  uint64_t fg_received=0, bg_received=0;	// number of received (fg, bg) frames (counted separetely)
+
+  if ( !*valid_entries ) {
+    // This is preliminary phase: state table is allocated from the memory of this NUMA node
+    stTbl = (atomicFourTuple *) rte_malloc("Responder/Receiver's state table", (sizeof(atomicFourTuple))*state_table_size, 128);
+    if ( !stTbl )
+      rte_exit(EXIT_FAILURE, "Error: Responder/Receiver can't allocate memory for state table!\n");
+    *stateTable = stTbl;		// return the address of the state table
+  } else { 
+    // A real test is performed now: we use the previously allocated state table
+    stTbl = *stateTable; 
+  }
+
+  // frames are received and their four tuples are recorded
+  while ( rte_rdtsc() < finish_receiving ){
+    frames = rte_eth_rx_burst(eth_id, 0, pkt_mbufs, MAX_PKT_BURST);
+    for (i=0; i < frames; i++){
+      uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbufs[i], uint8_t *); // Access the Test Frame in the message buffer
+      // check EtherType at offset 12: IPv6, IPv4, or anything else
+      if ( *(uint16_t *)&pkt[12]==ipv6 ) { /* IPv6  */
+        /* check if IPv6 Next Header is UDP, and the first 8 bytes of UDP data is 'IDENTIFY' */
+        if ( likely( pkt[20]==17 && *(uint64_t *)&pkt[62]==*id ) )
+          bg_received++;	// it is considered a background frame: we do not deal with it any more
+      } else if ( *(uint16_t *)&pkt[12]==ipv4 ) { /* IPv4 */
+        if ( likely( pkt[23]==17 && *(uint64_t *)&pkt[42]==*id ) ) {
+          fg_received++;	// it is considered a freground frame: we must learn its 4-tuple
+          // copy IPv4 fields to the four_tuple -- without using conversion from network byte order to host byte order
+          four_tuple.init_addr = *(uint32_t *)&pkt[26]; 	// 14+12: source IPv4 address
+          four_tuple.resp_addr = *(uint32_t *)&pkt[30]; 	// 14+16: destination IPv4 address
+          four_tuple.init_port = *(uint16_t *)&pkt[34]; 	// 14+20: source UDP port
+          four_tuple.resp_port = *(uint16_t *)&pkt[36]; 	// 14+22: destination UDP port
+	  stTbl[index] = four_tuple; 				// atomic write
+	  index = ++index % state_table_size;			// maintain write pointer
+        }
+      }
+      rte_pktmbuf_free(pkt_mbufs[i]);
+    }
+  }
+  printf("%s frames received: %lu\n", side, fg_received+bg_received);
+  if ( !*valid_entries ) {
+    // This one was a preliminary test, the number of valid entries should be reported
+    *valid_entries = ( fg_received < state_table_size ? fg_received : state_table_size );
+  }
+  return fg_received+bg_received;
+}
+
 // performs throughput (or frame loss rate) measurement
 void Throughput::measure(uint16_t leftport, uint16_t rightport) {
-  // set common parameters for senders
-  senderCommonParameters scp(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc);
+  switch ( stateful ) {
+    case 0:	// stateless test is to be performed
+      {
+      // set common parameters for senders
+      senderCommonParameters scp(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc);
 
-  if ( forward ) {	// Left to right direction is active
-    // set individual parameters for the left sender
+      if ( forward ) {	// Left to right direction is active
+        // set individual parameters for the left sender
+  
+        // first, collect the appropriate values dependig on the IP versions 
+        ipQuad ipq(ip_left_version,ip_right_version,&ipv4_left_real,&ipv4_right_real,&ipv4_left_virtual,&ipv4_right_virtual,
+                   &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
+    
+        // then, initialize the parameter class instance
+        senderParameters spars(&scp,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                               ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                               fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
+                                
+        // start left sender
+        if ( rte_eal_remote_launch(send, &spars, cpu_left_sender) )
+          std::cout << "Error: could not start Left Sender." << std::endl;
+    
+        // set parameters for the right receiver
+        receiverParameters rpars(finish_receiving,rightport,"Forward");
+    
+        // start right receiver
+        if ( rte_eal_remote_launch(receive, &rpars, cpu_right_receiver) )
+          std::cout << "Error: could not start Right Receiver." << std::endl;
+      }
+    
+      if ( reverse ) {	// Right to Left direction is active 
+        // set individual parameters for the right sender
+    
+        // first, collect the appropriate values dependig on the IP versions
+        ipQuad ipq(ip_right_version,ip_left_version,&ipv4_right_real,&ipv4_left_real,&ipv4_right_virtual,&ipv4_left_virtual,
+                   &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
+    
+        // then, initialize the parameter class instance
+        senderParameters spars(&scp,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                               ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                               rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
+    
+        // start right sender
+        if (rte_eal_remote_launch(send, &spars, cpu_right_sender) )
+          std::cout << "Error: could not start Right Sender." << std::endl;
+    
+        // set parameters for the left receiver
+        receiverParameters rpars(finish_receiving,leftport,"Reverse");
+    
+        // start left receiver
+        if ( rte_eal_remote_launch(receive, &rpars, cpu_left_receiver) )
+          std::cout << "Error: could not start Left Receiver." << std::endl;
+      }
+    
+      std::cout << "Info: Testing started." << std::endl;
+    
+      // wait until active senders and receivers finish 
+      if ( forward ) {
+        rte_eal_wait_lcore(cpu_left_sender);
+        rte_eal_wait_lcore(cpu_right_receiver);
+      }
+      if ( reverse ) {
+        rte_eal_wait_lcore(cpu_right_sender);
+        rte_eal_wait_lcore(cpu_left_receiver);
+      }
+      std::cout << "Info: Test finished." << std::endl;
+      break;
+      }
+    case 1:	// stateful test: Initiator is on the left side, Responder is on the right side
+      { 
+      // set "common" parameters (currently not common with anyone, only code is reused; it will be common, when sending test frames)
+      senderCommonParameters scp1(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
 
-    // first, collect the appropriate values dependig on the IP versions 
-    ipQuad ipq(ip_left_version,ip_right_version,&ipv4_left_real,&ipv4_right_real,&ipv4_left_virtual,&ipv4_right_virtual,
-               &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
+      // set "individual" parameters for the sender of the Initiator residing on the left side
+  
+      // first, collect the appropriate values dependig on the IP versions 
+      ipQuad ipq(ip_left_version,ip_right_version,&ipv4_left_real,&ipv4_right_real,&ipv4_left_virtual,&ipv4_right_virtual,
+                 &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
+  
+      // then, initialize the parameter class instance for premiminary phase
+      iSenderParameters ispars1(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                                fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
+			        enumerate_ports,pre_frames);
+                                
+      // start left sender
+      if ( rte_eal_remote_launch(isend, &ispars1, cpu_left_sender) )
+        std::cout << "Error: could not start Initiator's Sender." << std::endl;
+  
+      // set parameters for the right receiver
+      rReceiverParameters rrpars1(finish_receiving_pre,rightport,"Preliminary",state_table_size,&valid_entries,&stateTable); 
+  
+      // start right receiver
+      if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_right_receiver) )
+        std::cout << "Error: could not start Responder's Receiver." << std::endl;
+  
+      std::cout << "Info: Preliminary frame sending started." << std::endl;
+    
+      // wait until active senders and receivers finish 
+      rte_eal_wait_lcore(cpu_left_sender);
+      rte_eal_wait_lcore(cpu_right_receiver);
 
-    // then, initialize the parameter class instance
-    senderParameters spars(&scp,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                           ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-                           fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
-                            
-    // start left sender
-    if ( rte_eal_remote_launch(send, &spars, cpu_left_sender) )
-      std::cout << "Error: could not start Left Sender." << std::endl;
+      if ( valid_entries < state_table_size )
+        rte_exit(EXIT_FAILURE, "Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
+      else
+      	std::cout << "Info: Preliminary phase finished." << std::endl;
 
-    // set parameters for the right receiver
-    receiverParameters rpars(finish_receiving,rightport,"Forward");
+      // Now the real test may follow.
 
-    // start right receiver
-    if ( rte_eal_remote_launch(receive, &rpars, cpu_right_receiver) )
-      std::cout << "Error: could not start Right Receiver." << std::endl;
+      // set "common" parameters 
+      senderCommonParameters scp2(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc); 
+  
+      if ( forward ) {  // Left to right direction is active
+        // set "individual" parameters for the sender of the Initiator residing on the left side
+  
+        // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
+        iSenderParameters ispars2(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                  ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                                  fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
+                                  enumerate_ports,frames_to_send); // frames_to_send is not used, but calculated inside as: duration * frame_rate
+  
+        // start left sender
+        if ( rte_eal_remote_launch(isend, &ispars2, cpu_left_sender) )
+          std::cout << "Error: could not start Initiator's Sender." << std::endl;
+  
+        // set parameters for the right receiver
+        rReceiverParameters rrpars2(finish_receiving,rightport,"Forward",state_table_size,&valid_entries,&stateTable);
+  
+        // start right receiver
+        if ( rte_eal_remote_launch(rreceive, &rrpars2, cpu_right_receiver) )
+          std::cout << "Error: could not start Responder's Receiver." << std::endl;
+      }
+
+      if ( reverse ) {  // Right to Left direction is active
+        // set individual parameters for the right sender
+
+        // first, collect the appropriate values dependig on the IP versions
+        ipQuad ipq(ip_right_version,ip_left_version,&ipv4_right_real,&ipv4_left_real,&ipv4_right_virtual,&ipv4_left_virtual,
+                   &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
+
+        // then, initialize the parameter class instance
+        rSenderParameters rspars(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                                rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
+				state_table_size,stateTable,responder_ports);
+
+        // start right sender
+        if (rte_eal_remote_launch(rsend, &rspars, cpu_right_sender) )
+          std::cout << "Error: could not start Right Sender." << std::endl;
+
+        // set parameters for the left receiver
+        receiverParameters rpars(finish_receiving,leftport,"Reverse");
+
+        // start left receiver
+        if ( rte_eal_remote_launch(receive, &rpars, cpu_left_receiver) )
+          std::cout << "Error: could not start Left Receiver." << std::endl;
+      }
+
+      std::cout << "Info: Testing started." << std::endl;
+
+      // wait until active senders and receivers finish
+      if ( forward ) {
+        rte_eal_wait_lcore(cpu_left_sender);
+        rte_eal_wait_lcore(cpu_right_receiver);
+      }
+      if ( reverse ) {
+        rte_eal_wait_lcore(cpu_right_sender);
+        rte_eal_wait_lcore(cpu_left_receiver);
+      }
+      std::cout << "Info: Test finished." << std::endl;
+      break;
+      }
+    case 2:	// stateful test: Initiator is on the right side, Responder is on the left side
+      { 
+      // set "common" parameters (currently not common with anyone, only code is reused; it will be common, when sending test frames)
+      senderCommonParameters scp1(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
+
+      // set "individual" parameters for the sender of the Initiator residing on the right side
+
+      // first, collect the appropriate values dependig on the IP versions
+      ipQuad ipq(ip_right_version,ip_left_version,&ipv4_right_real,&ipv4_left_real,&ipv4_right_virtual,&ipv4_left_virtual,
+                 &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
+
+      // then, initialize the parameter class instance for preliminary phase
+      iSenderParameters ispars1(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                             ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                             rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
+			     enumerate_ports,pre_frames);
+
+      // start right sender
+      if (rte_eal_remote_launch(isend, &ispars1, cpu_right_sender) )
+        std::cout << "Error: could not Initiator's Sender." << std::endl;
+
+      // set parameters for the left receiver
+      rReceiverParameters rrpars1(finish_receiving_pre,leftport,"Preliminary",state_table_size,&valid_entries,&stateTable); 
+
+      // start left receiver
+      if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_left_receiver) )
+        std::cout << "Error: could not start Responder's Receiver." << std::endl;
+
+      std::cout << "Info: Preliminary frame sending started." << std::endl;
+
+      // wait until active senders and receivers finish
+      rte_eal_wait_lcore(cpu_right_sender);
+      rte_eal_wait_lcore(cpu_left_receiver);
+      
+      if ( valid_entries < state_table_size )
+        rte_exit(EXIT_FAILURE, "Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
+      else
+        std::cout << "Info: Preliminary phase finished." << std::endl;
+
+      // Now the real test may follow.
+
+      // set "common" parameters
+      senderCommonParameters scp2(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc);
+
+      if ( reverse ) {  // Right to Left direction is active
+        // set "individual" parameters for the sender of the Initiator residing on the right side
+  
+        // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
+        iSenderParameters ispars2(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                  ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                                  rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
+                                  enumerate_ports,frames_to_send); // frames_to_send is not used, but calculated inside as: duration * frame_rate
+  
+        // start right sender
+        if ( rte_eal_remote_launch(isend, &ispars2, cpu_right_sender) )
+          std::cout << "Error: could not start Initiator's Sender." << std::endl;
+  
+        // set parameters for the left receiver
+        rReceiverParameters rrpars2(finish_receiving,leftport,"Reverse",state_table_size,&valid_entries,&stateTable);
+  
+        // start left receiver
+        if ( rte_eal_remote_launch(rreceive, &rrpars2, cpu_left_receiver) )
+          std::cout << "Error: could not start Responder's Receiver." << std::endl;
+      }
+
+      if ( forward ) {  // Left to right direction is active
+        // set individual parameters for the left sender
+
+        // first, collect the appropriate values dependig on the IP versions
+        ipQuad ipq(ip_left_version,ip_right_version,&ipv4_left_real,&ipv4_right_real,&ipv4_left_virtual,&ipv4_right_virtual,
+                   &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
+
+        // then, initialize the parameter class instance
+        rSenderParameters rspars(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                                fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
+                                state_table_size,stateTable,responder_ports);
+
+        // start left sender
+        if (rte_eal_remote_launch(rsend, &rspars, cpu_left_sender) )
+          std::cout << "Error: could not start Left Sender." << std::endl;
+
+        // set parameters for the right receiver
+        receiverParameters rpars(finish_receiving,rightport,"Forward");
+
+        // start right receiver
+        if ( rte_eal_remote_launch(receive, &rpars, cpu_right_receiver) )
+          std::cout << "Error: could not start Right Receiver." << std::endl;
+      }
+
+      std::cout << "Info: Testing started." << std::endl;
+
+      // wait until active senders and receivers finish
+      if ( reverse ) {
+        rte_eal_wait_lcore(cpu_right_sender);
+        rte_eal_wait_lcore(cpu_left_receiver);
+      }
+      if ( forward ) {
+        rte_eal_wait_lcore(cpu_left_sender);
+        rte_eal_wait_lcore(cpu_right_receiver);
+      }
+      std::cout << "Info: Test finished." << std::endl;
+      break;
+      }
   }
-
-  if ( reverse ) {	// Right to Left direction is active 
-    // set individual parameters for the right sender
-
-    // first, collect the appropriate values dependig on the IP versions
-    ipQuad ipq(ip_right_version,ip_left_version,&ipv4_right_real,&ipv4_left_real,&ipv4_right_virtual,&ipv4_left_virtual,
-               &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
-
-    // then, initialize the parameter class instance
-    senderParameters spars(&scp,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                           ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                           rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
-
-    // start right sender
-    if (rte_eal_remote_launch(send, &spars, cpu_right_sender) )
-      std::cout << "Error: could not start Right Sender." << std::endl;
-
-    // set parameters for the left receiver
-    receiverParameters rpars(finish_receiving,leftport,"Reverse");
-
-    // start left receiver
-    if ( rte_eal_remote_launch(receive, &rpars, cpu_left_receiver) )
-      std::cout << "Error: could not start Left Receiver." << std::endl;
-  }
-
-  std::cout << "Info: Testing started." << std::endl;
-
-  // wait until active senders and receivers finish 
-  if ( forward ) {
-    rte_eal_wait_lcore(cpu_left_sender);
-    rte_eal_wait_lcore(cpu_right_receiver);
-  }
-  if ( reverse ) {
-    rte_eal_wait_lcore(cpu_right_sender);
-    rte_eal_wait_lcore(cpu_left_receiver);
-  }
-  std::cout << "Info: Test finished." << std::endl;
 }
 
 // sets the values of the data fields
@@ -1265,11 +2629,47 @@ senderParameters::senderParameters(class senderCommonParameters *cp_, int ip_ver
 }
 
 // sets the values of the data fields
+iSenderParameters::iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+                                     struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
+                                     struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
+                                     uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
+                                     uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
+				     unsigned enumerate_ports_,  uint32_t pre_frames_) :
+  senderParameters(cp_, ip_version_, pkt_pool_, eth_id_, side_, dst_mac_, src_mac_, src_ipv4_, dst_ipv4_, src_ipv6_, dst_ipv6_, src_bg_, dst_bg_,
+		   num_dest_nets_, var_sport_, var_dport_, sport_min_, sport_max_, dport_min_, dport_max_) {
+  enumerate_ports = enumerate_ports_;
+  pre_frames = pre_frames_;
+}
+
+// sets the values of the data fields
+rSenderParameters::rSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+                                     struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
+                                     struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
+                                     uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
+                                     uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
+                   		     unsigned state_table_size_, atomicFourTuple *stateTable_, unsigned responder_ports_) :
+  senderParameters(cp_, ip_version_, pkt_pool_, eth_id_, side_, dst_mac_, src_mac_, src_ipv4_, dst_ipv4_, src_ipv6_, dst_ipv6_, src_bg_, dst_bg_,
+                   num_dest_nets_, var_sport_, var_dport_, sport_min_, sport_max_, dport_min_, dport_max_) {
+  state_table_size = state_table_size_;
+  stateTable = stateTable_;
+  responder_ports = responder_ports_;
+}
+
+// sets the values of the data fields
 receiverParameters::receiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_) {
   finish_receiving=finish_receiving_;
   eth_id = eth_id_;
   side = side_;
 }
+
+rReceiverParameters::rReceiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, unsigned state_table_size_,
+                                         unsigned *valid_entries_, atomicFourTuple **stateTable_) :
+  receiverParameters::receiverParameters(finish_receiving_,eth_id_,side_) {
+  state_table_size = state_table_size_;
+  valid_entries = valid_entries_;
+  stateTable = stateTable_;
+}
+
 
 // collects the apppropriate IP addresses
 // for simplicity, both source and destionation address fields exist in both v4 and v6, but only the appropriate version IP addresses are set, 
