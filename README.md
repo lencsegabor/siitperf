@@ -156,9 +156,13 @@ The stateful extension uses further command line paremeters:
 The additional command line parameters are to be interpreted as follows:
 
 __N__: the number of test frames to send in the preliminary phase (1 – 2^32-1)
+
 __M__: the number of entries in the state table of the Tester (1 – 2^32-1)
+
 __R__: the frame rate, at which the test frames are sent during the preliminary phase (in frames per second)
+
 __T__: the global timeout for the preliminary frames (in milliseconds, 1 – 2000)
+
 __D__: the overall delay caused by the preliminary phase (in milliseconds, 1 – 100,000)
 
 The execution of the measurements are supported by the following scripts (they support only stateless tests):
