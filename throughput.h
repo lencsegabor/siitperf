@@ -150,8 +150,11 @@ public:
 
 // functions to create Test Frames (and their parts)
 struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
-                                const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                                const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport);
+                              const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport);
+struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                                   const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                                   const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport);
 void mkEthHeader(struct ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type);
 void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, const uint32_t *dst_ip);
 void mkUdpHeader(struct udp_hdr *udp, uint16_t length, unsigned var_sport, unsigned var_dport); 
