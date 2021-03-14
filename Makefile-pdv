@@ -49,6 +49,6 @@ SRCS-y := main-pdv.c throughput.c pdv.c
 # CFLAGS += -g
 CFLAGS += -O3
 # CFLAGS += $(WERROR_FLAGS)
-LDLIBS += -lnuma
+LDLIBS += -lnuma -latomic
 
 include $(RTE_SDK)/mk/rte.extapp.mk
