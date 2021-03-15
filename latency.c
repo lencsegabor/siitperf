@@ -67,10 +67,10 @@ int Latency::senderPoolSize(int num_dest_nets, int varport) {
 }
 
 // creates a special IPv4 Test Frame tagged for latency measurement using several helper functions
-// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
-struct rte_mbuf *mkLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+// BEHAVIOR: it sets exatly, what it is told to set :-)
+struct rte_mbuf *mkFinalLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport, int id) {
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport, int id) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Latency Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the Latency Frame! \n", side);
@@ -86,7 +86,7 @@ struct rte_mbuf *mkLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const c
   int ip_length = length - sizeof(ether_hdr);
   mkIpv4Header(ip_hdr, ip_length, src_ip, dst_ip);      // Does not set IPv4 header checksum
   int udp_length = ip_length - sizeof(ipv4_hdr);        // No IP Options are used
-  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);
+  mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(udp_hdr);
   mkDataLatency(udp_data, data_legth, id);
   udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
@@ -94,34 +94,23 @@ struct rte_mbuf *mkLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const c
   return pkt_mbuf;
 }
 
-// creates a special IPv4 Test Frame tagged for latency measurement for (stateful) Resonder/sender: used with "Responder-ports 0"
-// BEHAVIOR: calls mkLatencyFrame4 and then sets the port numbers
-struct rte_mbuf *mkFinalLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+
+// creates a special IPv4 Test Frame tagged for latency measurement using mkFinalLatencyFrame4
+// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+struct rte_mbuf *mkLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport, int id) {
-  struct rte_mbuf *pkt_mbuf=mkLatencyFrame4(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,1,1,id); // creates a test frame with 0 port numbers
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport, int id) {
+  // sport/dport are set to 0, if they will change, otherwise follow RFC 2544 Test Frame format
+  struct rte_mbuf *pkt_mbuf=mkFinalLatencyFrame4(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,var_sport ? 0 : 0xC020,var_dport ? 0 : 0x0007,id);
   // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
-  uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *);                 // Access the Test Frame in the message buffer
-  uint16_t *udp_sport = (uint16_t *) (pkt + 34);        // Access to the source port field
-  uint16_t *udp_dport = (uint16_t *) (pkt + 36);        // Access to the destination port field
-  uint16_t *udp_chksum = (uint16_t *) (pkt + 40);       // Access to the checksum field
-  *udp_sport = sport;                   // set source port number -- with no htons()
-  *udp_dport = dport;                   // set destination port number -- with no htons()
-  uint32_t chksum = ~*udp_chksum;       // save the uncomplemented checksum value
-  chksum += sport;                      // add sport to checksum
-  chksum += dport;                      // add dport to checksum
-  chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
-  chksum = (~chksum) & 0xffff;                                    // make one's complement
-  if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-  chksum = 0xffff;
-  *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
   return pkt_mbuf;
 }
 
 // creates a special IPv6 Test Frame tagged for latency measurement using several helper functions
-struct rte_mbuf *mkLatencyFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
+// BEHAVIOR: it sets exatly, what it is told to set :-)
+struct rte_mbuf *mkFinalLatencyFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport, uint16_t id) {
+                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned sport, unsigned dport, uint16_t id) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Latency Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the Latency Frame! \n", side);
@@ -137,10 +126,21 @@ struct rte_mbuf *mkLatencyFrame6(uint16_t length, rte_mempool *pkt_pool, const c
   int ip_length = length - sizeof(ether_hdr);
   mkIpv6Header(ip_hdr, ip_length, src_ip, dst_ip);
   int udp_length = ip_length - sizeof(ipv6_hdr); // No IP Options are used
-  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);
+  mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(udp_hdr);
   mkDataLatency(udp_data, data_legth, id);
   udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  return pkt_mbuf;
+}
+
+// creates a special IPv6 Test Frame tagged for latency measurement using mkFinalLatencyFrame6
+// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+struct rte_mbuf *mkLatencyFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                              const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport, uint16_t id) {
+  // sport/dport are set to 0, if they will change, otherwise follow RFC 2544 Test Frame format
+  struct rte_mbuf *pkt_mbuf=mkFinalLatencyFrame6(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,var_sport ? 0 : 0xC020,var_dport ? 0 : 0x0007,id);
+  // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
   return pkt_mbuf;
 }
 
@@ -788,18 +788,20 @@ int rsendLatency(void *par) {
   unsigned index;       // current state table index for reading a 4-tuple (used when 'responder-ports' is 1 or 2)
   fourTuple ft;         // 4-tuple is read from the state table into this
   bool fg_frame;        // the current frame belongs to the foreground traffic: will be handled in a stateful way (if it is IPv4)
-
   if ( !responder_ports ) {
     // optimized code for using a single 4-tuple taken from the very first preliminary frame (as foreground traffic)
     // ( similar to using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4 )
-    ft=stateTable[0];   // read only once
+    ft = stateTable[0];   // read only once
+    uint16_t resp_port = ntohs(ft.resp_port); // our functions expect port numbers in host byte order
+    uint16_t init_port = ntohs(ft.init_port); // our functions expect port numbers in host byte order
+
     if ( num_dest_nets== 1 ) {
       // optimized code for single detination network: always the same foreground or background frame is sent, 
       // except latency frames, which are stored in an array
       struct rte_mbuf *fg_pkt_mbuf, *bg_pkt_mbuf; // message buffers for fg. and bg. Test Frames
       // create foreground Test Frame
       if ( ip_version == 4 )
-        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port);
+        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, resp_port, init_port);
       else  // IPv6 -- stateful operation is not yet supported!
         fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
   
@@ -815,7 +817,7 @@ int rsendLatency(void *par) {
       for ( int i=0; i<num_timestamps; i++ )
         if ( (start_latency_frame+i*frame_rate*latency_test_time/num_timestamps) % n  < m ) {
           if ( ip_version == 4 )  // foreground frame, may be IPv4 or IPv6
-            latency_frames[i] = mkFinalLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port, i);
+            latency_frames[i] = mkFinalLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, resp_port, init_port, i);
           else  // IPv6 -- stateful operation is not yet supported!
             latency_frames[i] = mkLatencyFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0, i);
         } else {
@@ -856,7 +858,7 @@ int rsendLatency(void *par) {
   
       // create foreground Test Frame
       if ( ip_version == 4 ) {
-        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port);
+        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, resp_port, init_port);
       }
       else { // IPv6 -- stateful operation is not yet supported!
         fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
@@ -883,7 +885,8 @@ int rsendLatency(void *par) {
       for ( int i=0; i<num_timestamps; i++ )
         if ( (start_latency_frame+i*frame_rate*latency_test_time/num_timestamps) % n  < m ) {
           if ( ip_version == 4 ) { 
-            latency_frames[i] = mkFinalLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port, i);
+            latency_frames[i] = mkFinalLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, resp_port, init_port, i);
+
           } else {	// IPv6 -- stateful operation is not yet supported!
             latency_frames[i] = mkLatencyFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0, i);
           }
@@ -988,7 +991,7 @@ int rsendLatency(void *par) {
         if ( (start_latency_frame+i*frame_rate*latency_test_time/num_timestamps) % n  < m ) {
 	  // foreground frame, may be IPv4 or IPv6
           if ( ip_version == 4 ) {
-            latency_frames[i] = mkLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport, i);
+            latency_frames[i] = mkLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1, i);
             pkt = rte_pktmbuf_mtod(latency_frames[i], uint8_t *); // Access the Test Frame in the message buffer
             lat_ipv4_hdr[i] = pkt + 14;
             lat_ipv4_chksum[i] = pkt + 24;
@@ -1253,7 +1256,7 @@ int rsendLatency(void *par) {
         if ( (start_latency_frame+i*frame_rate*latency_test_time/num_timestamps) % n  < m ) {
           // foreground frame
           if ( ip_version == 4 ) { 
-            latency_frames[i] = mkLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport, i);
+            latency_frames[i] = mkLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1, i);
             pkt = rte_pktmbuf_mtod(latency_frames[i], uint8_t *); // Access the Test Frame in the message buffer
             lat_ipv4_hdr[i] = pkt + 14;
             lat_ipv4_chksum[i] = pkt + 24;
