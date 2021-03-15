@@ -479,8 +479,7 @@ int sendLatency(void *par) {
             case 3:                     // pseudorandom port numbers
               sp = uni_dis_sport(gen_sport);
           }
-          *udp_sport = htons(sp);       // set source port
-          chksum += sp;                 // add to checksum
+          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
         }
         if ( var_dport ) {
           // dport is varying
@@ -498,8 +497,7 @@ int sendLatency(void *par) {
             case 3:                     // pseudorandom port numbers
               dp = uni_dis_dport(gen_dport);
           }
-          *udp_dport = htons(dp);       // set destination port
-          chksum += dp;                 // add to checksum
+          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
         chksum = (~chksum) & 0xffff;                                    // make one's complement
@@ -682,8 +680,7 @@ int sendLatency(void *par) {
             case 3:                     // pseudorandom port numbers
               sp = uni_dis_sport(gen_sport);
           }
-          *udp_sport = htons(sp);       // set source port
-          chksum += sp;                 // add to checksum
+          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
         }
         if ( var_dport ) {
           // dport is varying
@@ -701,8 +698,7 @@ int sendLatency(void *par) {
             case 3:                     // pseudorandom port numbers
               dp = uni_dis_dport(gen_dport);
           }
-          *udp_dport = htons(dp);       // set destination port
-          chksum += dp;                 // add to checksum
+          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
         chksum = (~chksum) & 0xffff;                                    // make one's complement
@@ -1133,8 +1129,7 @@ int rsendLatency(void *par) {
               case 3:                     // pseudorandom port numbers
                 sp = uni_dis_sport(gen_sport);
             }
-            *udp_sport = htons(sp);       // set source port
-            chksum += sp;                 // add to checksum
+            chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
           }
           if ( var_dport ) {
             // dport is varying
@@ -1152,8 +1147,7 @@ int rsendLatency(void *par) {
               case 3:                     // pseudorandom port numbers
                 dp = uni_dis_dport(gen_dport);
             }
-            *udp_dport = htons(dp);       // set destination port
-            chksum += dp;                 // add to checksum
+            chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
           }
           chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
           chksum = (~chksum) & 0xffff;                                    // make one's complement
@@ -1393,8 +1387,7 @@ int rsendLatency(void *par) {
               case 3:                     // pseudorandom port numbers
                 sp = uni_dis_sport(gen_sport);
             }
-            *udp_sport = htons(sp);       // set source port
-            chksum += sp;                 // add to checksum
+            chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
           }
           if ( var_dport ) {
             // dport is varying
@@ -1412,8 +1405,7 @@ int rsendLatency(void *par) {
               case 3:                     // pseudorandom port numbers
                 dp = uni_dis_dport(gen_dport);
             }
-            *udp_dport = htons(dp);       // set destination port
-            chksum += dp;                 // add to checksum
+            chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
           }
           chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
           chksum = (~chksum) & 0xffff;                                    // make one's complement

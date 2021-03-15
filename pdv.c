@@ -453,8 +453,7 @@ int sendPdv(void *par) {
             case 3:                     // pseudorandom port numbers
               sp = uni_dis_sport(gen_sport);
           }
-          *udp_sport = htons(sp);       // set source port
-          chksum += sp;                 // add to checksum
+          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
         }
         if ( var_dport ) {
           // dport is varying
@@ -472,8 +471,7 @@ int sendPdv(void *par) {
             case 3:                     // pseudorandom port numbers
               dp = uni_dis_dport(gen_dport);
           }
-          *udp_dport = htons(dp);       // set destination port
-          chksum += dp;                 // add to checksum
+          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
 	*counter = sent_frames;         // set the counter in the frame
 	chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
@@ -610,8 +608,7 @@ int sendPdv(void *par) {
             case 3:                     // pseudorandom port numbers
               sp = uni_dis_sport(gen_sport);
           }
-          *udp_sport = htons(sp);       // set source port
-          chksum += sp;                 // add to checksum
+          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
         }
         if ( var_dport ) {
           // dport is varying
@@ -629,8 +626,7 @@ int sendPdv(void *par) {
             case 3:                     // pseudorandom port numbers
               dp = uni_dis_dport(gen_dport);
           }
-          *udp_dport = htons(dp);       // set destination port
-          chksum += dp;                 // add to checksum
+          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         *counter = sent_frames;         // set the counter in the frame
         chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
@@ -1034,8 +1030,7 @@ int rsendPdv(void *par) {
               case 3:                     // pseudorandom port numbers
                 sp = uni_dis_sport(gen_sport);
             }
-            *udp_sport = htons(sp);       // set source port
-            chksum += sp;                 // add to checksum
+            chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
           }
           if ( var_dport ) {
             // dport is varying
@@ -1053,8 +1048,7 @@ int rsendPdv(void *par) {
               case 3:                     // pseudorandom port numbers
                 dp = uni_dis_dport(gen_dport);
             }
-            *udp_dport = htons(dp);       // set destination port
-            chksum += dp;                 // add to checksum
+            chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
           }
  	  *counter = sent_frames;         // set the counter in the frame
   	  chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
@@ -1241,8 +1235,7 @@ int rsendPdv(void *par) {
               case 3:                     // pseudorandom port numbers
                 sp = uni_dis_sport(gen_sport);
             }
-            *udp_sport = htons(sp);       // set source port
-            chksum += sp;                 // add to checksum
+            chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
           }
           if ( var_dport ) {
             // dport is varying
@@ -1260,8 +1253,7 @@ int rsendPdv(void *par) {
               case 3:                     // pseudorandom port numbers
                 dp = uni_dis_dport(gen_dport);
             }
-            *udp_dport = htons(dp);       // set destination port
-            chksum += dp;                 // add to checksum
+            chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
           }
           *counter = sent_frames;         // set the counter in the frame
           chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
