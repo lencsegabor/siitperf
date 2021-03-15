@@ -735,11 +735,14 @@ void check_tsc(int cpu, const char *cpu_name) {
     rte_exit(EXIT_FAILURE, "Error: TSC of core #%i for %s is not synchronized with that of the main core!\n", cpu, cpu_name);
 }
 
+// Several functions follow to create IPv4 or IPv6 Test Frames
+// Please refer to RFC 2544 Appendix C.2.6.4 "Test Frames" for the values to be set in the test frames.
+
 // creates an IPv4 Test Frame using several helper functions
-// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
-struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+// BEHAVIOR: it sets exatly, what it is told to set :-)
+struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Test Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the IPv4 Test Frame! \n", side);
@@ -755,7 +758,7 @@ struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char
   int ip_length = length - sizeof(ether_hdr);
   mkIpv4Header(ip_hdr, ip_length, src_ip, dst_ip); 	// Does not set IPv4 header checksum
   int udp_length = ip_length - sizeof(ipv4_hdr); 	// No IP Options are used
-  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);			
+  mkUdpHeader(udp_hd, udp_length, sport, dport);			
   int data_legth = udp_length - sizeof(udp_hdr);
   mkData(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
@@ -763,7 +766,17 @@ struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char
   return pkt_mbuf;
 }
 
-// Please refer to RFC 2544 Appendx C.2.6.4 Test Frames for the values to be set in the test frames.
+// creates an IPv4 Test Frame using mkFinalTestFrame4
+// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                              const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
+  // sport/dport are set to 0, if they will change, otherwise follow RFC 2544 Test Frame format
+  struct rte_mbuf *pkt_mbuf=mkFinalTestFrame4(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,var_sport ? 0 : 0xC020,var_dport ? 0 : 0x0007);
+  // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
+  return pkt_mbuf;
+}
+
 
 // creates an Ethernet header
 void mkEthHeader(struct ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type) {
@@ -788,12 +801,11 @@ void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, 
 }
 
 // creates an UDP header
-void mkUdpHeader(struct udp_hdr *udp, uint16_t length, unsigned var_sport, unsigned var_dport) {
-  udp->src_port =  htons(var_sport ? 0 : 0xC020); // set to 0 if source port number will change, otherwise RFC 2544 Test Frame format
-  udp->dst_port =  htons(var_dport ? 0 : 0x0007); // set to 0 if destination port number will change, otherwise RFC 2544 Test Frame format
+void mkUdpHeader(struct udp_hdr *udp, uint16_t length, unsigned sport, unsigned dport) {
+  udp->src_port =  htons(sport);
+  udp->dst_port =  htons(dport);
   udp->dgram_len = htons(length);
-  udp->dgram_cksum = 0; // Checksum is set to 0 now.
-  // UDP checksum is calculated later.
+  udp->dgram_cksum = 0; // UDP checksum is set to 0 now, it will be calculated later.
 }
 
 // fills the data field of the Test Frame
@@ -809,10 +821,10 @@ void mkData(uint8_t *data, uint16_t length) {
 }
 
 // creates an IPv6 Test Frame using several helper functions
-// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
-struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
+// BEHAVIOR: it sets exatly, what it is told to set :-)
+struct rte_mbuf *mkFinalTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
+                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned sport, unsigned dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Test Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the IPv6 Test Frame! \n", side);
@@ -828,12 +840,24 @@ struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char
   int ip_length = length - sizeof(ether_hdr);
   mkIpv6Header(ip_hdr, ip_length, src_ip, dst_ip); 
   int udp_length = ip_length - sizeof(ipv6_hdr); // No IP Options are used
-  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);
+  mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(udp_hdr);
   mkData(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
   return pkt_mbuf;
 }
+
+// creates an IPv6 Test Frame using mkFinalTestFrame6
+// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                              const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
+  // sport/dport are set to 0, if they will change, otherwise follow RFC 2544 Test Frame format
+  struct rte_mbuf *pkt_mbuf=mkFinalTestFrame6(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,var_sport ? 0 : 0xC020,var_dport ? 0 : 0x0007);
+  // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
+  return pkt_mbuf;
+}
+
 
 // creates an IPv6 header
 void mkIpv6Header(struct ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip) {
@@ -844,33 +868,6 @@ void mkIpv6Header(struct ipv6_hdr *ip, uint16_t length, const struct in6_addr *s
   rte_mov16((uint8_t *)&ip->src_addr,(uint8_t *)src_ip);
   rte_mov16((uint8_t *)&ip->dst_addr,(uint8_t *)dst_ip);
 }
-
-
-// creates an IPv4 Test Frame for (stateful) Resonder/sender: used with "Responder-ports 0"
-// BEHAVIOR: calls mkTestFrame4 and then sets the port numbers
-struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
-                              const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport) {
-  
-  struct rte_mbuf *pkt_mbuf=mkTestFrame4(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,1,1); // creates a test frame with 0 port numbers
-  // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
-  uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); 		// Access the Test Frame in the message buffer
-  uint16_t *udp_sport = (uint16_t *) (pkt + 34);	// Access to the source port field
-  uint16_t *udp_dport = (uint16_t *) (pkt + 36);	// Access to the destination port field
-  uint16_t *udp_chksum = (uint16_t *) (pkt + 40);	// Access to the checksum field
-  *udp_sport = sport;    		// set source port number -- with no htons()
-  *udp_dport = dport;			// set destination port number -- with no htons()
-  uint32_t chksum = ~*udp_chksum; 	// save the uncomplemented checksum value
-  chksum += sport;              	// add sport to checksum
-  chksum += dport;              	// add dport to checksum
-  chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
-  chksum = (~chksum) & 0xffff;                                    // make one's complement
-  if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-  chksum = 0xffff;
-  *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
-  return pkt_mbuf;
-}
-
 
 // sends Test Frames for throughput (or frame loss rate) measurement
 int send(void *par) {
