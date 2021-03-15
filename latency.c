@@ -94,7 +94,6 @@ struct rte_mbuf *mkFinalLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, co
   return pkt_mbuf;
 }
 
-
 // creates a special IPv4 Test Frame tagged for latency measurement using mkFinalLatencyFrame4
 // BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
 struct rte_mbuf *mkLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
@@ -467,13 +466,11 @@ int sendLatency(void *par) {
           // sport is varying
           switch ( var_sport ) {
             case 1:                     // increasing port numbers
-              sp = sport++;
-              if ( sport == sport_max )
+              if ( (sp=sport++) == sport_max )
                 sport = sport_min;
               break;
             case 2:                     // decreasing port numbers
-              sp = sport--;
-              if ( sport == sport_min )
+              if ( (sp=sport--) == sport_min )
                 sport = sport_max;
               break;
             case 3:                     // pseudorandom port numbers
@@ -485,13 +482,11 @@ int sendLatency(void *par) {
           // dport is varying
           switch ( var_dport ) {
             case 1:                     // increasing port numbers
-              dp = dport++;
-              if ( dport == dport_max )
+              if ( (dp=dport++) == dport_max )
                 dport = dport_min;
               break;
             case 2:                     // decreasing port numbers
-              dp = dport--;
-              if ( dport == dport_min )
+              if ( (dp=dport--) == dport_min )
                 dport = dport_max;
               break;
             case 3:                     // pseudorandom port numbers
@@ -668,13 +663,11 @@ int sendLatency(void *par) {
           // sport is varying
           switch ( var_sport ) {
             case 1:                     // increasing port numbers
-              sp = sport++;
-              if ( sport == sport_max )
+              if ( (sp=sport++) == sport_max )
                 sport = sport_min;
               break;
             case 2:                     // decreasing port numbers
-              sp = sport--;
-              if ( sport == sport_min )
+              if ( (sp=sport--) == sport_min )
                 sport = sport_max;
               break;
             case 3:                     // pseudorandom port numbers
@@ -686,13 +679,11 @@ int sendLatency(void *par) {
           // dport is varying
           switch ( var_dport ) {
             case 1:                     // increasing port numbers
-              dp = dport++;
-              if ( dport == dport_max )
+              if ( (dp=dport++) == dport_max )
                 dport = dport_min;
               break;
             case 2:                     // decreasing port numbers
-              dp = dport--;
-              if ( dport == dport_min )
+              if ( (dp=dport--) == dport_min )
                 dport = dport_max;
               break;
             case 3:                     // pseudorandom port numbers
@@ -1120,13 +1111,11 @@ int rsendLatency(void *par) {
             // sport is varying
             switch ( var_sport ) {
               case 1:                     // increasing port numbers
-                sp = sport++;
-                if ( sport == sport_max )
+                if ( (sp=sport++) == sport_max )
                   sport = sport_min;
                 break;
               case 2:                     // decreasing port numbers
-                sp = sport--;
-                if ( sport == sport_min )
+                if ( (sp=sport--) == sport_min )
                   sport = sport_max;
                 break;
               case 3:                     // pseudorandom port numbers
@@ -1138,13 +1127,11 @@ int rsendLatency(void *par) {
             // dport is varying
             switch ( var_dport ) {
               case 1:                     // increasing port numbers
-                dp = dport++;
-                if ( dport == dport_max )
+                if ( (dp=dport++) == dport_max )
                   dport = dport_min;
                 break;
               case 2:                     // decreasing port numbers
-                dp = dport--;
-                if ( dport == dport_min )
+                if ( (dp=dport--) == dport_min )
                   dport = dport_max;
                 break;
               case 3:                     // pseudorandom port numbers
@@ -1378,13 +1365,11 @@ int rsendLatency(void *par) {
             // sport is varying
             switch ( var_sport ) {
               case 1:                     // increasing port numbers
-                sp = sport++;
-                if ( sport == sport_max )
+                if ( (sp=sport++) == sport_max )
                   sport = sport_min;
                 break;
               case 2:                     // decreasing port numbers
-                sp = sport--;
-                if ( sport == sport_min )
+                if ( (sp=sport--) == sport_min )
                   sport = sport_max;
                 break;
               case 3:                     // pseudorandom port numbers
@@ -1396,13 +1381,11 @@ int rsendLatency(void *par) {
             // dport is varying
             switch ( var_dport ) {
               case 1:                     // increasing port numbers
-                dp = dport++;
-                if ( dport == dport_max )
+                if ( (dp=dport++) == dport_max )
                   dport = dport_min;
                 break;
               case 2:                     // decreasing port numbers
-                dp = dport--;
-                if ( dport == dport_min )
+                if ( (dp=dport--) == dport_min )
                   dport = dport_max;
                 break;
               case 3:                     // pseudorandom port numbers
