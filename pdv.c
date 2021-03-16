@@ -56,10 +56,10 @@ int Pdv::senderPoolSize(int num_dest_nets, int varport) {
 }
 
 // creates a special IPv4 Test Frame for PDV measurement using several helper functions
-// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
-struct rte_mbuf *mkPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+// BEHAVIOR: it sets exatly, what it is told to set :-)
+struct rte_mbuf *mkFinalPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the PDV Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the PDV Frame! \n", side);
@@ -75,7 +75,7 @@ struct rte_mbuf *mkPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char 
   int ip_length = length - sizeof(ether_hdr);
   mkIpv4Header(ip_hdr, ip_length, src_ip, dst_ip);      // Does not set IPv4 header checksum
   int udp_length = ip_length - sizeof(ipv4_hdr);        // No IP Options are used
-  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);
+  mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(udp_hdr);
   mkDataPdv(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
@@ -83,34 +83,22 @@ struct rte_mbuf *mkPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char 
   return pkt_mbuf;
 }
 
-// creates a special IPv4 Test Frame for PDV measurement using several helper functions
-// BEHAVIOR: calls mkPdvFrame4 and then sets the port numbers
-struct rte_mbuf *mkFinalPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+// creates a special IPv4 Test Frame for PDV measurement using mkFinalPdvFrame4
+// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+struct rte_mbuf *mkPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport) {
-  struct rte_mbuf *pkt_mbuf=mkPdvFrame4(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,1,1); // creates a test frame with 0 port numbers
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
+  // sport/dport are set to 0, if they will change, otherwise follow RFC 2544 Test Frame format
+  struct rte_mbuf *pkt_mbuf=mkFinalPdvFrame4(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,var_sport ? 0 : 0xC020,var_dport ? 0 : 0x0007);
   // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
-  uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *);                 // Access the Test Frame in the message buffer
-  uint16_t *udp_sport = (uint16_t *) (pkt + 34);        // Access to the source port field
-  uint16_t *udp_dport = (uint16_t *) (pkt + 36);        // Access to the destination port field
-  uint16_t *udp_chksum = (uint16_t *) (pkt + 40);       // Access to the checksum field
-  *udp_sport = sport;                   // set source port number -- with no htons()
-  *udp_dport = dport;                   // set destination port number -- with no htons()
-  uint32_t chksum = ~*udp_chksum;       // save the uncomplemented checksum value
-  chksum += sport;                      // add sport to checksum
-  chksum += dport;                      // add dport to checksum
-  chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
-  chksum = (~chksum) & 0xffff;                                    // make one's complement
-  if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-  chksum = 0xffff;
-  *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
   return pkt_mbuf;
 }
 
 // creates a special IPv6 Test Frame for PDV measurement using several helper functions
-struct rte_mbuf *mkPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
+// BEHAVIOR: it sets exatly, what it is told to set :-)
+struct rte_mbuf *mkFinalPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
-                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
+                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned sport, unsigned dport) {
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the PDV Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the PDV Frame! \n", side);
@@ -126,10 +114,21 @@ struct rte_mbuf *mkPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char 
   int ip_length = length - sizeof(ether_hdr);
   mkIpv6Header(ip_hdr, ip_length, src_ip, dst_ip);
   int udp_length = ip_length - sizeof(ipv6_hdr); // No IP Options are used
-  mkUdpHeader(udp_hd, udp_length, var_sport, var_dport);
+  mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(udp_hdr);
   mkDataPdv(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  return pkt_mbuf;
+}
+
+// creates a special IPv6 Test Frame for PDV measurement using mkFinalPdvFrame6
+// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+struct rte_mbuf *mkPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                              const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                              const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
+  // sport/dport are set to 0, if they will change, otherwise follow RFC 2544 Test Frame format
+  struct rte_mbuf *pkt_mbuf=mkFinalPdvFrame6(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,var_sport ? 0 : 0xC020,var_dport ? 0 : 0x0007);
+  // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
   return pkt_mbuf;
 }
 
@@ -714,6 +713,9 @@ int rsendPdv(void *par) {
     // optimized code for using a single 4-tuple taken from the very first preliminary frame (as foreground traffic)
     // ( similar to using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4 )
     ft=stateTable[0];   // read only once
+    uint16_t resp_port = ntohs(ft.resp_port); // our functions expect port numbers in host byte order
+    uint16_t init_port = ntohs(ft.init_port); // our functions expect port numbers in host byte order
+
     if ( num_dest_nets== 1 ) {
       // optimized code for single destination network: always the same foreground or background frame is sent, 
       // but it is updated regarding counter and UDP checksum
@@ -729,7 +731,7 @@ int rsendPdv(void *par) {
       for ( i=0; i<N; i++ ) {
         // create foreground PDV Frame (IPv4 or IPv6)
         if ( ip_version == 4 ) {
-          fg_pkt_mbuf[i] = mkFinalPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port);
+          fg_pkt_mbuf[i] = mkFinalPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, resp_port, init_port);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
           fg_udp_chksum[i] = pkt + 40;
           fg_counter[i] = pkt + 50;
@@ -803,7 +805,7 @@ int rsendPdv(void *par) {
       for ( j=0; j<N; j++ ) {
         // create foreground PDV Frame (IPv4 or IPv6)
         if ( ip_version == 4 ) {
-          fg_pkt_mbuf[j] = mkFinalPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port);
+          fg_pkt_mbuf[j] = mkFinalPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, resp_port, init_port);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[j], uint8_t *); // Access the PDV Frame in the message buffer
           fg_udp_chksum[j] = pkt + 40;
           fg_counter[j] = pkt + 50;
