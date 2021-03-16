@@ -1020,13 +1020,11 @@ int rsendPdv(void *par) {
             // sport is varying
             switch ( var_sport ) {
               case 1:                     // increasing port numbers
-                sp = sport++;
-                if ( sport == sport_max )
+                if ( (sp=sport++) == sport_max )
                   sport = sport_min;
                 break;
               case 2:                     // decreasing port numbers
-                sp = sport--;
-                if ( sport == sport_min )
+                if ( (sp=sport--) == sport_min )
                   sport = sport_max;
                 break;
               case 3:                     // pseudorandom port numbers
@@ -1038,13 +1036,11 @@ int rsendPdv(void *par) {
             // dport is varying
             switch ( var_dport ) {
               case 1:                     // increasing port numbers
-                dp = dport++;
-                if ( dport == dport_max )
+                if ( (dp=dport++) == dport_max )
                   dport = dport_min;
                 break;
               case 2:                     // decreasing port numbers
-                dp = dport--;
-                if ( dport == dport_min )
+                if ( (dp=dport--) == dport_min )
                   dport = dport_max;
                 break;
               case 3:                     // pseudorandom port numbers
@@ -1225,13 +1221,11 @@ int rsendPdv(void *par) {
             // sport is varying
             switch ( var_sport ) {
               case 1:                     // increasing port numbers
-                sp = sport++;
-                if ( sport == sport_max )
+                if ( (sp=sport++) == sport_max )
                   sport = sport_min;
                 break;
               case 2:                     // decreasing port numbers
-                sp = sport--;
-                if ( sport == sport_min )
+                if ( (sp=sport--) == sport_min )
                   sport = sport_max;
                 break;
               case 3:                     // pseudorandom port numbers
@@ -1243,13 +1237,11 @@ int rsendPdv(void *par) {
             // dport is varying
             switch ( var_dport ) {
               case 1:                     // increasing port numbers
-                dp = dport++;
-                if ( dport == dport_max )
+                if ( (dp=dport++) == dport_max )
                   dport = dport_min;
                 break;
               case 2:                     // decreasing port numbers
-                dp = dport--;
-                if ( dport == dport_min )
+                if ( (dp=dport--) == dport_min )
                   dport = dport_max;
                 break;
               case 3:                     // pseudorandom port numbers
