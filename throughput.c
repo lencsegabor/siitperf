@@ -335,8 +335,8 @@ int Throughput::readConfigFile(const char *filename) {
       }
     } else if ( (pos = findKey(line, "Enumerate-ports")) >= 0 ) {
       sscanf(line+pos, "%u", &enumerate_ports);
-      if ( enumerate_ports > 1 ) {
-        std::cerr << "Input Error: 'Enumerate-ports' must be 0 or 1." << std::endl;
+      if ( enumerate_ports > 4 ) {
+        std::cerr << "Input Error: 'Enumerate-ports' must be 0, 1, 2, 3 or 4." << std::endl;
         return -1;
       }
     } else if ( nonComment(line) ) { // It may be too strict!
@@ -469,9 +469,42 @@ int Throughput::readCmdLine(int argc, const char *argv[]) {
     }
     else
       std::cout << "Info: 1000*N/R+T: " << ((uint64_t)1000)*pre_frames/pre_rate+pre_timeout << " <= D: " << pre_delay << std::endl;
-    if ( pre_frames*m/n < state_table_size ) {
-      std::cerr << "Input Error: N*m/n < M (there are not enough foreground frames to fill the state table)." << std::endl;
+    // calculate the effective number of the preliminary frames as: all preliminary frames - backgroud frames
+    eff_pre_frames = pre_frames-pre_frames*(n-m)/n; // Note: pre_frames*m/n is NOT exactly correct!
+    if ( eff_pre_frames < state_table_size ) {
+      std::cerr << "Input Error: N-N*(n-m)/n < M (there are not enough foreground frames to fill the state table)." << std::endl;
       return -1;
+    }
+    if ( enumerate_ports == 3 || enumerate_ports == 4 ) {
+      // unique port number combinations are required for each foreground preliminary frame
+      // check if there are enough of them
+      uint64_t portNumberCombinations;	// theoretically may be equal with 2**32, thus uint32_t is not enough
+      if ( stateful == 1 )
+	portNumberCombinations = (fwd_sport_max-fwd_sport_min+1)*(fwd_dport_max-fwd_dport_min+1);
+      else // sateful is 2
+	portNumberCombinations = (rev_sport_max-rev_sport_min+1)*(rev_dport_max-rev_dport_min+1);
+      std::cout << "Info: number of unique port number combinations: " <<  portNumberCombinations << std::endl;
+      std::cout << "Info: number of foreground preliminary frames: " << eff_pre_frames << std::endl;
+      if ( portNumberCombinations < eff_pre_frames ) {
+        std::cerr << "Input Error: There are not enough unique port number combinations for each (foregound) preliminary frames." << std::endl;
+        return -1;
+      }
+      if (  enumerate_ports == 3 ) {
+        if ( portNumberCombinations < CHECKING_VERY_LOW*eff_pre_frames ) {
+          std::cerr << "Warning: To avoid serious frame rate degradation of the Tester in the preliminary phase, please use random permutation for ensuring unique port number combination for each foreground preliminary frame. (Enumerate-ports 4)" << std::endl;
+        }
+        else if ( portNumberCombinations < CHECKING_A_BIT_LOW*eff_pre_frames ) {
+          std::cerr << "Warning: For higher frame rate of the Tester in the preliminary phase, please consider using random permutation to ensure unique port number combination for each foreground preliminary frame. (Enumerate-ports 4)" << std::endl;
+        }
+      }
+      if (  enumerate_ports == 4 && portNumberCombinations > SIGNIFICANT_NUMBER ) {
+        if ( portNumberCombinations > RAND_PERM_VERY_HIGH*eff_pre_frames ) {
+          std::cerr << "Warning: To avoid serious delay in the preliminary phase, please use the accounting of port number combinations for ensuring unique port number combination for each foreground preliminary frame. (Enumerate-ports 3)" << std::endl;
+        }
+        else if ( portNumberCombinations > RAND_PERM_A_BIT_HIGH*eff_pre_frames ) {
+          std::cerr << "Warning: For lower delay in the preliminary phase, please consider the accounting of port number combinations for ensuring unique port number combination for each foreground preliminary frame. (Enumerate-ports 3)" << std::endl;
+        }
+      }
     }
     if ( responder_ports && state_table_size==1 ) {
       std::cerr << "Input Error: 'Responder-ports' MUST be set to 0, if the size of the state table (M) is 1." << std::endl;
@@ -677,16 +710,76 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
 
   // prepare further values for testing
   hz = rte_get_timer_hz();		// number of clock cycles per second
+
+  uint64_t estimation=0; // delay will be caused by the pre-generation of unigue port number combinations;
+  if ( stateful && enumerate_ports == 4 ) {
+    // the pre-generation of the port numbers may require some time
+    if ( eff_pre_frames > SIGNIFICANT_NUMBER ) {
+	// there is point in estimation
+	uint16_t src_min, src_max, dst_min, dst_max;	// port number ranges
+	uint32_t src_size, dst_size;	// sizes of the aboove port number ranges
+	ports32 *array;	// array for port number combinations
+	uint64_t size; 	// size of the above array
+	uint64_t start_exp, end_exp;	// time stamps of experiment for estimation
+
+      if ( stateful == 1 ) {
+	src_min = fwd_sport_min;
+	src_max = fwd_sport_max;
+	dst_min = fwd_dport_min;
+	dst_max = fwd_dport_max;
+      } else { // sateful is 2
+	src_min = rev_sport_min;
+	src_max = rev_sport_max;
+	dst_min = rev_dport_min;
+	dst_max = rev_dport_max;
+	}
+	src_size = src_max-src_min+1;
+	dst_size = dst_max-dst_min+1;
+
+	// check if the larger range is large enough to be reduced for the estimation
+	if ( src_size > dst_size )
+	if ( src_size >= MIN_RANGE_FOR_EST ) {
+	  // reduce source port range for estimation
+	  src_size = (int) ceil(1.0*src_size/ESTIMATE_PORTION);
+	  src_max = src_min+src_size-1;
+	  std::cerr << "Debug: Source port range is reduced to [" << src_min << ", " <<src_max << "] for estimation." << std::endl;
+	} else {
+	  std::cerr << "Error: Source port range [" << src_min << ", " << src_max << "] is too narrow for the estimation of the time of pre-generation of unique port number combinations, Tester exits." << std::endl;
+	  return -1;
+	}
+	else
+        if ( dst_size >= MIN_RANGE_FOR_EST ) {
+          // reduce destination port range for estimation
+          dst_size = (int) ceil(1.0*dst_size/ESTIMATE_PORTION);
+          dst_max = dst_min+dst_size-1;
+          std::cerr << "Debug: Destination port range is reduced to [" << dst_min << ", " << dst_max << "] for estimation." << std::endl;
+        } else {
+          std::cerr << "Error: Destination port range [" << dst_min << ", " << dst_max << "] is too narrow for the estimation of the time of pre-generation of unique port number combinations, Tester exits." << std::endl;
+          return -1;
+        }
+	size = src_size*dst_size;
+  	array = (ports32 *) rte_malloc("Ports array for estimation", (sizeof(ports32))*size, 128);
+  	if ( !array )
+    	  rte_exit(EXIT_FAILURE, "Error: Can't allocate memory for Ports array for the estimation of the time of pre-generation of unique port number combinations!\n");
+	start_exp = rte_rdtsc();
+	randomPermutation(array,src_min,src_max,dst_min,dst_max);
+	end_exp = rte_rdtsc();
+	rte_free(array);
+	estimation = (end_exp-start_exp)*ESTIMATE_PORTION*SPARE_FACTOR;
+	std::cerr << "Info: Estimated delay of the pre-generation of uniqe random port numbers is: " << 1.0*estimation/hz << " seconds." << std::endl;
+    }
+  }
+
   if ( !stateful) {
     //for stateless tests:
     start_tsc = rte_rdtsc()+hz*START_DELAY/1000;	// Each active sender starts sending at this time
-    finish_receiving = start_tsc + hz*duration + hz*global_timeout/1000; 	// Each receiver stops at this time
+    finish_receiving = start_tsc + hz*duration + hz*global_timeout/1000; // Each receiver stops at this time
   }
-  else
+  else 
   {
     // for stateful tests:
     // the sender of the Initiator starts sending preliminary frames at this time:
-    start_tsc_pre = rte_rdtsc()+hz*START_DELAY/1000;
+    start_tsc_pre = rte_rdtsc() + hz*START_DELAY/1000 + estimation; // estimation may be 0 
     // the receiver of the Responder stops receiving preliminary frames at this time:
     finish_receiving_pre = start_tsc_pre + hz*pre_frames/pre_rate + hz*pre_timeout/1000; 
     // production test starts at this time:
@@ -984,7 +1077,7 @@ int send(void *par) {
   } // end of optimized code for fixed port numbers
   else {
 
-  printf("%s : old sender is running, varport is on.\n", side, sent_frames);
+//  printf("%s: old sender is running, varport is on.\n", side, sent_frames);
 
     // implementation of varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
     // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
@@ -1258,7 +1351,7 @@ int send(void *par) {
   return 0;
 }
 
-// Initiator/Sender: sends Preliminary Frames or Test Frames for throughput (or frame loss rate) measurement
+// Initiator/Sender: sends Preliminary Frames (no more used for sending real Test Frames)
 int isend(void *par) {
   // collecting input parameters:
   class iSenderParameters *p = (class iSenderParameters *)par;
@@ -1268,7 +1361,7 @@ int isend(void *par) {
   uint16_t ipv6_frame_size = cp->ipv6_frame_size;
   uint16_t ipv4_frame_size = cp->ipv4_frame_size;
   uint32_t frame_rate = cp->frame_rate;
-  uint16_t duration = cp->duration;
+  // uint16_t duration = cp->duration; 	// not used in isend
   uint32_t n = cp->n;
   uint32_t m = cp->m;
   uint64_t hz = cp->hz;
@@ -1302,12 +1395,11 @@ int isend(void *par) {
   // further local variables
   uint64_t frames_to_send;
   uint64_t sent_frames=0; 	// counts the number of sent frames
-  double elapsed_seconds; 	// for checking the elapsed seconds during sending
+  bool *portCombination=0; 	// pointer to a 64k x 64k array for accounting port number combinations (Responder-ports 3)
+  ports32 *uniquePortComb;	// array for pre-generated unique port number combinations (Responder-ports 4)
+  ports32 *uniquePC;		// working pointer to the current element of the above array	
 
-  if ( duration ) 
-    frames_to_send = duration * frame_rate;	// calculate from duration for the real test
-  else
-    frames_to_send = p->pre_frames;		// use the specified value for sending preliminary frames
+  frames_to_send = p->pre_frames;	// use the specified value for sending preliminary frames
 
   unsigned varport = var_sport || var_dport || enumerate_ports; // derived logical value: at least one port has to be changed?
 
@@ -1424,19 +1516,46 @@ int isend(void *par) {
         bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       } 
 
-      // set the starting values of port numbers, if they are increased or decreased
-      if ( enumerate_ports ) {
-        e_sport = sport_min;
-        e_dport = dport_min;
+      // prepare for the different kinds of port number enumarations
+      switch ( enumerate_ports ) {
+        case 0: // no port number enumeration is done 
+          // set the starting values of port numbers, if they are increased or decreased
+          if ( var_sport == 1 )
+            sport = sport_min; 
+          if ( var_sport == 2 )
+            sport = sport_max;
+          if ( var_dport == 1 )
+            dport = dport_min; 
+          if ( var_dport == 2 )
+            dport = dport_max;
+	  break;
+        case 1: // port numbers are enumerated in increasing order 
+          e_sport = sport_min;
+          e_dport = dport_min;
+	  break;
+        case 2: // port numbers are enumerated in decreasing order
+          e_sport = sport_max;
+          e_dport = dport_max;
+	  break;
+	case 3: // unique pseudorandom port number pairs are guarandteed by accounting
+	  portCombination = (bool *) rte_zmalloc("Initiator/Sender's unique port number combination accounting table", 4294967296, 128); // allocate 2**32 bytes
+	  if ( !portCombination )
+            rte_exit(EXIT_FAILURE, "Error: Initiator/Sender can't allocate memory for unique port number combination accounting table!\n");
+	  break;
+	case 4: // unique pseudorandom port number pairs are guarandteed by pre-prepaired random permutation
+	  uint64_t size = (sport_max-sport_min+1)*(dport_max-dport_min+1); // size of the array
+          uint64_t start_gen, end_gen;    // timestamps (just for checking the estimation)
+
+          uniquePC = uniquePortComb = (ports32 *) rte_malloc("Pre-geneated unique port number combinations", (sizeof(ports32))*size, 128);
+          if ( !uniquePortComb )
+            rte_exit(EXIT_FAILURE, "Error: Can't allocate memory for Pre-geneated unique port number combinations array!\n");
+ 	  std::cerr << "Info: Pre-generating unique port numbers... ";
+          start_gen = rte_rdtsc();
+          randomPermutation(uniquePortComb,sport_min,sport_max,dport_min,dport_max);
+          end_gen = rte_rdtsc();
+	  std::cerr << "Done. Lasted " << 1.0*(end_gen-start_gen)/hz << " seconds." << std::endl;
+	  break;
       } 
-      if ( var_sport == 1 )
-        sport = sport_min; 
-      if ( var_sport == 2 )
-        sport = sport_max;
-      if ( var_dport == 1 )
-        dport = dport_min; 
-      if ( var_dport == 2 )
-        dport = dport_max;
 
       // prepare random number infrastructure
       thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engines
@@ -1468,15 +1587,50 @@ int isend(void *par) {
         }
         // from here, we need to handle the frame identified by the temprary variables
         if ( enumerate_ports && fg_frame ) {
-	  // port numbers are enumerated: sport is the low order counter, dport is the high order counter
-	  if ( (sp=e_sport++) == sport_max ) {
-            e_sport = sport_min;
-            if ( (dp=e_dport++) == dport_max )
-               e_dport = dport_min;
-          } else 
-            dp = e_dport;
-          chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
-          chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+	  switch ( enumerate_ports ) {
+	    case 1: // port numbers are enumerated in incresing order
+       	      // sport is the low order counter, dport is the high order counter
+    	      if ( (sp=e_sport++) == sport_max ) {
+                e_sport = sport_min;
+                if ( (dp=e_dport++) == dport_max )
+                   e_dport = dport_min;
+              } else 
+                dp = e_dport;
+              chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+              chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+	      break;
+            case 2: // port numbers are enumerated in decresing order
+              // sport is the low order counter, dport is the high order counter
+              if ( (sp=e_sport--) == sport_min ) {
+                e_sport = sport_max;
+                if ( (dp=e_dport--) == dport_min )
+                   e_dport = dport_max;
+              } else
+                dp = e_dport;
+              chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+              chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+              break;
+            case 3: // a unique pseudorandom port number pair is generated 
+	      uint32_t index;
+	      do {
+                sp = uni_dis_sport(gen_sport);
+                dp = uni_dis_dport(gen_dport);
+	        index = (sp<<16)+dp;
+//      std::cout << "Debug: sp: " << sp << ", dp: " << dp << std::endl;
+//      std::cout << "Debug: index: " << index << std::endl;
+	      } while ( portCombination[index] );  // hazard of too many iterations!
+	      portCombination[index] = 1; 	    // mark this combination as used
+              chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+              chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+	      break;
+	    case 4:
+	      sp = uniquePC->port.src;	// read source port number
+	      dp = uniquePC->port.dst;	// read destination port number
+	      uniquePC++;		// increase pointer: no check needed, we have surely enough
+              chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
+              chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
+	      break;
+          } // end of switch
         } else {
  	  // port numbers are handled as before
           if ( var_sport ) {
@@ -1664,23 +1818,21 @@ int isend(void *par) {
       } // this is the end of the sending cycle
     } // end of the optimized code for multiple destination networks
   } // end of implementation of varying port numbers 
-  uint64_t elapsed_tsc = rte_rdtsc()-start_tsc;
+
   // Now, we check the time
-  if ( duration ) {
-    elapsed_seconds = (double)elapsed_tsc/hz;
-    printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
-    if ( elapsed_seconds > duration*TOLERANCE )
-      rte_exit(EXIT_FAILURE, "%s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
-  }
-  else // this is a preliminary test, duration is not valid
-  {
-    if ( elapsed_tsc > hz*frames_to_send/frame_rate*TOLERANCE )
-      rte_exit(EXIT_FAILURE, "%s sending was too slow (only %3.10lf percent of required rate), the test is invalid.\n", side,
-               100.0*frames_to_send/elapsed_tsc*hz/frame_rate);
-  }
+  uint64_t elapsed_tsc = rte_rdtsc()-start_tsc;
+  printf("Info: %s sender's sending took %3.10lf seconds.\n", side, (double)elapsed_tsc/hz);
+  // this is a preliminary test, 'duration' is not valid
+  if ( elapsed_tsc > hz*frames_to_send/frame_rate*TOLERANCE )
+    rte_exit(EXIT_FAILURE, "%s sending was too slow (only %3.10lf percent of required rate), the test is invalid.\n", side,
+             100.0*frames_to_send/elapsed_tsc*hz/frame_rate);
 
   printf("%s frames sent: %lu\n", side, sent_frames);
 
+  if ( portCombination )
+    rte_free(portCombination); 	// free the 64k x 64k array for accounting port number combinations
+  if ( uniquePortComb ) 
+    rte_free(uniquePortComb);	// free the array for pre-generated unique port number combinations
   return 0;
 }
 
@@ -2401,7 +2553,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_right_receiver) )
         std::cout << "Error: could not start Responder's Receiver." << std::endl;
   
-      std::cout << "Info: Preliminary frame sending started." << std::endl;
+      std::cout << "Info: Preliminary frame sending initiated." << std::endl;
     
       // wait until active senders and receivers finish 
       rte_eal_wait_lcore(cpu_left_sender);
@@ -2418,16 +2570,15 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       senderCommonParameters scp2(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc); 
   
       if ( forward ) {  // Left to right direction is active
-        // set "individual" parameters for the sender of the Initiator residing on the left side
+        // set "individual" parameters for the (normal) sender of the Initiator residing on the left side
   
         // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
-        iSenderParameters ispars2(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+        senderParameters spars2(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
                                   ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-                                  fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-                                  enumerate_ports,frames_to_send); // frames_to_send is not used, but calculated inside as: duration * frame_rate
+                                  fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
   
         // start left sender
-        if ( rte_eal_remote_launch(isend, &ispars2, cpu_left_sender) )
+        if ( rte_eal_remote_launch(send, &spars2, cpu_left_sender) )
           std::cout << "Error: could not start Initiator's Sender." << std::endl;
   
         // set parameters for the right receiver
@@ -2525,13 +2676,12 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
         // set "individual" parameters for the sender of the Initiator residing on the right side
   
         // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
-        iSenderParameters ispars2(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+        senderParameters spars2(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
                                   ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                                  rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
-                                  enumerate_ports,frames_to_send); // frames_to_send is not used, but calculated inside as: duration * frame_rate
+                                  rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
   
         // start right sender
-        if ( rte_eal_remote_launch(isend, &ispars2, cpu_right_sender) )
+        if ( rte_eal_remote_launch(isend, &spars2, cpu_right_sender) )
           std::cout << "Error: could not start Initiator's Sender." << std::endl;
   
         // set parameters for the left receiver
@@ -2688,5 +2838,49 @@ ipQuad::ipQuad(int ip_A_version, int ip_B_version, uint32_t *ipv4_A_real, uint32
       dst_ipv4 = ipv4_B_real;    // IPv4 traffic
     else
       dst_ipv4 = ipv4_B_virtual; // NAT46
+  }
+}
+
+// prepares unique random port number combinations using random permutation
+void randomPermutation(ports32 *array, uint16_t src_min, uint16_t src_max, uint16_t dst_min, uint16_t dst_max) {
+  uint16_t s, d; // relative source and destination port numbers
+  uint16_t sport, dport; // source and destination port numbers
+  uint32_t ssize = src_max-src_min+1; // range size of source ports 
+  uint32_t dsize = dst_max-dst_min+1; // range size of destination ports 
+  uint64_t size = ssize*dsize;  // size of the entire array 
+  uint32_t index, random; 	// index and random variables
+
+  // Preliminary filling the array with linearly enumerated port number combinations would look like so:
+  // for ( sport=src_min; sport<=src_max; sport++ )
+  //   for ( dport=dst_min; dport<=dst_max; dport++ )
+  //    array[(sport-src_min)*ssize+dport-dst_min];
+  // But it is not done, to avoid exchanges, elements are generated in place.
+
+  // prepare random permutation using Fisher–Yates shuffle, as implemented by Durstenfeld (in-place)
+  // http://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#The_.22inside-out.22_algorithm
+
+  // random number infrastructure is taken from: https://en.cppreference.com/w/cpp/numeric/random/uniform_real_distribution
+  // MT64 is used because of https://medium.com/@odarbelaeze/how-competitive-are-c-standard-random-number-generators-f3de98d973f0
+  // thread_local is used on the basis of https://stackoverflow.com/questions/40655814/is-mersenne-twister-thread-safe-for-cpp
+  thread_local std::random_device rd;  // Will be used to obtain a seed for the random number engine
+  thread_local std::mt19937_64 gen(rd()); // Standard 64-bit mersenne_twister_engine seeded with rd()
+  std::uniform_real_distribution<double> uni_dis(0, 1.0);
+
+  // set the very first element
+  array[0].port.src=src_min;
+  array[0].port.dst=dst_min;
+  for ( index=1; index<size; index++ ){
+    // prepare the coordinetes
+    s = index / ssize;	// source port relative to src_min
+    d = index % ssize;	// destination port relative to dst_min
+    sport = s + src_min;	// real source port number
+    dport = d + dst_min;	// real destination port number
+    // generate a random integer in the range [0, index] using uni_dis(gen), a random double in [0, 1).
+    random = uni_dis(gen)*(index+1);
+
+    // condition "if ( random != index )" is left out to spare a branch instruction on the cost of a redundant copy
+    array[index].data=array[random].data;
+    array[random].port.src=sport;
+    array[random].port.dst=dport;
   }
 }

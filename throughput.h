@@ -37,6 +37,21 @@ struct fourTuple {
 // atomic 4-tuple for to ensure consistent reading and writing of the state table of the Responder
 typedef std::atomic<fourTuple> atomicFourTuple;
 
+// port pair for unique port number combinations using random permutation
+struct portPair {
+  uint16_t src;	// source port number
+  uint16_t dst;	// destination port number
+};
+
+// a union facilitating the access of the portpair as a 32-bit number
+union ports32 {
+  portPair port;
+  uint32_t data;
+};
+
+// function prepares unique random port number combinations by enumeration and then random permutation
+void randomPermutation(ports32 *array, uint16_t src_min, uint16_t src_max, uint16_t dst_min, uint16_t dst_max);
+
 // the main class for siitperf
 // data members are used for storing parameters
 // member functions are used for the most important functions
@@ -100,8 +115,14 @@ public:
   //           3: select a 4-tuple from the state table in a pseudorandom way (to be RFC 4814 compliant)
   unsigned responder_ports;     // how to select a 4-tuple for test frame generation
 
-  // encoding: 0: no, use port numbers as specified by other parameters
-  //           1: yes, sport is the low order, dport is the high order counter, their min and max values are honored
+  // encoding: 
+  //    0: no, use port numbers as specified by other parameters
+  //  1,2: yes, sport is the low order, dport is the high order counter, their min and max values are honored
+  //    1: port number combinations are enumerated in inreasing order
+  //    1: port number combinations are enumerated in dereasing order
+  //  3,4: unique random port number combinations are used, their min and max values are honored
+  //    3: uniqueness is ensured by accounting (and generating different ones, if needed)
+  //    4: uniqueness is ensured by using pre-generated random permutation  
   unsigned enumerate_ports;
 
   // positional parameters from command line
@@ -113,6 +134,7 @@ public:
   uint32_t n, m;		// modulo and threshold for controlling background traffic proportion
 
   uint32_t pre_frames;		// "N": the number of test frames to send in the preliminary phase
+  uint32_t eff_pre_frames;	// the number of the foregound preliminary frames
   uint32_t state_table_size;	// "M": the number of entries in the state table of the Tester
   uint32_t pre_rate;		// "R": the frame rate, at which the test frames are sent during the preliminary phase
   uint16_t pre_timeout;		// global timeout for the preliminary frames (in milliseconds, 0-2000)
