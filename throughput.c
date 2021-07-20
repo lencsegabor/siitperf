@@ -1616,8 +1616,6 @@ int isend(void *par) {
                 sp = uni_dis_sport(gen_sport);
                 dp = uni_dis_dport(gen_dport);
 	        index = (sp<<16)+dp;
-//      std::cout << "Debug: sp: " << sp << ", dp: " << dp << std::endl;
-//      std::cout << "Debug: index: " << index << std::endl;
 	      } while ( portCombination[index] );  // hazard of too many iterations!
 	      portCombination[index] = 1; 	    // mark this combination as used
               chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
@@ -2853,7 +2851,7 @@ void randomPermutation(ports32 *array, uint16_t src_min, uint16_t src_max, uint1
   // Preliminary filling the array with linearly enumerated port number combinations would look like so:
   // for ( sport=src_min; sport<=src_max; sport++ )
   //   for ( dport=dst_min; dport<=dst_max; dport++ )
-  //    array[(sport-src_min)*ssize+dport-dst_min];
+  //    array[(sport-src_min)*dsize+dport-dst_min];
   // But it is not done, to avoid exchanges, elements are generated in place.
 
   // prepare random permutation using Fisher–Yates shuffle, as implemented by Durstenfeld (in-place)
@@ -2871,8 +2869,8 @@ void randomPermutation(ports32 *array, uint16_t src_min, uint16_t src_max, uint1
   array[0].port.dst=dst_min;
   for ( index=1; index<size; index++ ){
     // prepare the coordinetes
-    s = index / ssize;	// source port relative to src_min
-    d = index % ssize;	// destination port relative to dst_min
+    s = index / dsize;	// source port relative to src_min
+    d = index % dsize;	// destination port relative to dst_min
     sport = s + src_min;	// real source port number
     dport = d + dst_min;	// real destination port number
     // generate a random integer in the range [0, index] using uni_dis(gen), a random double in [0, 1).
