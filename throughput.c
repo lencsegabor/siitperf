@@ -61,6 +61,7 @@ Throughput::Throughput(){
   responder_ports = 0;		// default value: use a single four tuple (like fix port numbers)
   stateTable = 0;  		// to cause segmentation fault if not initialized
   valid_entries = 0;   		// to indicate that state table is empty (used by rsend)
+  uniquePortComb = 0;		// to indicate that no memory was allocated
 };
 
 // finds a 'key' (name of a parameter) in the 'line' string

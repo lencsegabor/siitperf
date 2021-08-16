@@ -155,7 +155,7 @@ public:
   atomicFourTuple *stateTable;	// pointer of the state table of the Responder
   unsigned valid_entries = 0;	// number of valid entries in the state table
 
-  ports32 *uniquePortComb; 	// array of pre-generated unique port number combinations (Responder-ports 4)
+  ports32 *uniquePortComb = 0; 	// array of pre-generated unique port number combinations (Responder-ports 4)
 
 
   // helper functions (see their description at their definition)
