@@ -459,8 +459,8 @@ int Throughput::readCmdLine(int argc, const char *argv[]) {
       std::cerr << "Input Error: the value of 'T' (global timeout for the preliminary frames) must be between 1 and 2000." << std::endl;
       return -1;
     }
-    if ( sscanf(argv[11], "%u", &pre_delay) != 1 || pre_delay < 1 || pre_delay > 100000 ) {
-      std::cerr << "Input Error: the value of 'D' (delay caused by the preliminary phase) must be between 1 and 100000." << std::endl;
+    if ( sscanf(argv[11], "%u", &pre_delay) != 1 || pre_delay < 1 || pre_delay > 3000000 ) { // hack: raised from 100000 to 3000000
+      std::cerr << "Input Error: the value of 'D' (delay caused by the preliminary phase) must be between 1 and 3000000." << std::endl;
       return -1;
     }
     if ( ((uint64_t)1000)*pre_frames/pre_rate+pre_timeout > pre_delay ) {
@@ -711,67 +711,44 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
   // prepare further values for testing
   hz = rte_get_timer_hz();		// number of clock cycles per second
 
-  uint64_t estimation=0; // delay will be caused by the pre-generation of unigue port number combinations;
   if ( stateful && enumerate_ports == 4 ) {
-    // the pre-generation of the port numbers may require some time
-    if ( eff_pre_frames > SIGNIFICANT_NUMBER ) {
-	// there is point in estimation
-	uint16_t src_min, src_max, dst_min, dst_max;	// port number ranges
-	uint32_t src_size, dst_size;	// sizes of the aboove port number ranges
-	ports32 *array;	// array for port number combinations
-	uint64_t size; 	// size of the above array
-	uint64_t start_exp, end_exp;	// time stamps of experiment for estimation
+    // Pre-generation of unique source and destination port numbers is required
 
-      if ( stateful == 1 ) {
-	src_min = fwd_sport_min;
-	src_max = fwd_sport_max;
-	dst_min = fwd_dport_min;
-	dst_max = fwd_dport_max;
-      } else { // sateful is 2
-	src_min = rev_sport_min;
-	src_max = rev_sport_max;
-	dst_min = rev_dport_min;
-	dst_max = rev_dport_max;
-	}
-	src_size = src_max-src_min+1;
-	dst_size = dst_max-dst_min+1;
+    // collect port numbers and lcore info
+    uint16_t src_min, src_max, dst_min, dst_max;	// port number ranges
+    int cpu_isend;			// lcore for Initiator/Sender
 
-	// check if the larger range is large enough to be reduced for the estimation
-	if ( src_size > dst_size )
-	if ( src_size >= MIN_RANGE_FOR_EST ) {
-	  // reduce source port range for estimation
-	  src_size = (int) ceil(1.0*src_size/ESTIMATE_PORTION);
-	  src_max = src_min+src_size-1;
-	  std::cerr << "Debug: Source port range is reduced to [" << src_min << ", " <<src_max << "] for estimation." << std::endl;
-	} else {
-	  std::cerr << "Error: Source port range [" << src_min << ", " << src_max << "] is too narrow for the estimation of the time of pre-generation of unique port number combinations, Tester exits." << std::endl;
-	  return -1;
-	}
-	else
-        if ( dst_size >= MIN_RANGE_FOR_EST ) {
-          // reduce destination port range for estimation
-          dst_size = (int) ceil(1.0*dst_size/ESTIMATE_PORTION);
-          dst_max = dst_min+dst_size-1;
-          std::cerr << "Debug: Destination port range is reduced to [" << dst_min << ", " << dst_max << "] for estimation." << std::endl;
-        } else {
-          std::cerr << "Error: Destination port range [" << dst_min << ", " << dst_max << "] is too narrow for the estimation of the time of pre-generation of unique port number combinations, Tester exits." << std::endl;
-          return -1;
-        }
-	size = src_size*dst_size;
-  	array = (ports32 *) rte_malloc("Ports array for estimation", (sizeof(ports32))*size, 128);
-  	if ( !array )
-    	  rte_exit(EXIT_FAILURE, "Error: Can't allocate memory for Ports array for the estimation of the time of pre-generation of unique port number combinations!\n");
-	start_exp = rte_rdtsc();
-	randomPermutation(array,src_min,src_max,dst_min,dst_max);
-	end_exp = rte_rdtsc();
-	rte_free(array);
-	estimation = (end_exp-start_exp)*ESTIMATE_PORTION*SPARE_FACTOR;
-	std::cerr << "Info: Estimated delay of the pre-generation of uniqe random port numbers is: " << 1.0*estimation/hz << " seconds." << std::endl;
+    if ( stateful == 1 ) {
+      src_min = fwd_sport_min;
+      src_max = fwd_sport_max;
+      dst_min = fwd_dport_min;
+      dst_max = fwd_dport_max;
+      cpu_isend = cpu_left_sender;
+    } else { // sateful is 2
+      src_min = rev_sport_min;
+      src_max = rev_sport_max;
+      dst_min = rev_dport_min;
+      dst_max = rev_dport_max;
+      cpu_isend = cpu_right_sender;
     }
+
+    // prepare the parameters for the randomPermutationGenerator
+    randomPermutationGeneratorParameters pars;
+    pars.addr_of_arraypointer = &uniquePortComb;
+    pars.src_min = src_min;
+    pars.src_max = src_max;
+    pars.dst_min = dst_min;
+    pars.dst_max = dst_max;
+    pars.hz = hz;
+
+    // start randomPermutationGenerator
+    if ( rte_eal_remote_launch(randomPermutationGenerator, &pars, cpu_isend) )
+      std::cout << "Error: could not start randomPermutationGenerator for pre-generating unique port number combinations." << std::endl;
+    rte_eal_wait_lcore(cpu_isend);
   }
 
   if ( !stateful) {
-    //for stateless tests:
+    // for stateless tests:
     start_tsc = rte_rdtsc()+hz*START_DELAY/1000;	// Each active sender starts sending at this time
     finish_receiving = start_tsc + hz*duration + hz*global_timeout/1000; // Each receiver stops at this time
   }
@@ -779,7 +756,7 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
   {
     // for stateful tests:
     // the sender of the Initiator starts sending preliminary frames at this time:
-    start_tsc_pre = rte_rdtsc() + hz*START_DELAY/1000 + estimation; // estimation may be 0 
+    start_tsc_pre = rte_rdtsc() + hz*START_DELAY/1000; 
     // the receiver of the Responder stops receiving preliminary frames at this time:
     finish_receiving_pre = start_tsc_pre + hz*pre_frames/pre_rate + hz*pre_timeout/1000; 
     // production test starts at this time:
@@ -1387,6 +1364,7 @@ int isend(void *par) {
   uint16_t sport_max = p->sport_max;
   uint16_t dport_min = p->dport_min;
   uint16_t dport_max = p->dport_max;
+  ports32 *uniquePortComb = p->uniquePortComb;	// array of pre-generated unique port number combinations (Responder-ports 4)
 
   unsigned enumerate_ports = p->enumerate_ports;
 
@@ -1396,8 +1374,7 @@ int isend(void *par) {
   uint64_t frames_to_send;
   uint64_t sent_frames=0; 	// counts the number of sent frames
   bool *portCombination=0; 	// pointer to a 64k x 64k array for accounting port number combinations (Responder-ports 3)
-  ports32 *uniquePortComb;	// array for pre-generated unique port number combinations (Responder-ports 4)
-  ports32 *uniquePC;		// working pointer to the current element of the above array	
+  ports32 *uniquePC=uniquePortComb;	// working pointer to the current element of uniquePortComb
 
   frames_to_send = p->pre_frames;	// use the specified value for sending preliminary frames
 
@@ -1542,18 +1519,10 @@ int isend(void *par) {
 	  if ( !portCombination )
             rte_exit(EXIT_FAILURE, "Error: Initiator/Sender can't allocate memory for unique port number combination accounting table!\n");
 	  break;
-	case 4: // unique pseudorandom port number pairs are guarandteed by pre-prepaired random permutation
-	  uint64_t size = (sport_max-sport_min+1)*(dport_max-dport_min+1); // size of the array
-          uint64_t start_gen, end_gen;    // timestamps (just for checking the estimation)
-
-          uniquePC = uniquePortComb = (ports32 *) rte_malloc("Pre-geneated unique port number combinations", (sizeof(ports32))*size, 128);
-          if ( !uniquePortComb )
-            rte_exit(EXIT_FAILURE, "Error: Can't allocate memory for Pre-geneated unique port number combinations array!\n");
- 	  std::cerr << "Info: Pre-generating unique port numbers... ";
-          start_gen = rte_rdtsc();
-          randomPermutation(uniquePortComb,sport_min,sport_max,dport_min,dport_max);
-          end_gen = rte_rdtsc();
-	  std::cerr << "Done. Lasted " << 1.0*(end_gen-start_gen)/hz << " seconds." << std::endl;
+	case 4: 
+	  if ( !uniquePortComb )
+            rte_exit(EXIT_FAILURE, "Error: Initiator/Sender received a NULL pointer to the array of pre-prepaired unique random port numbers!\n");
+	  // unique pseudorandom port number pairs are guarandteed by pre-prepaired random permutation
 	  break;
       } 
 
@@ -2538,7 +2507,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       iSenderParameters ispars1(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
                                 fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-			        enumerate_ports,pre_frames);
+			        enumerate_ports,pre_frames,uniquePortComb);
                                 
       // start left sender
       if ( rte_eal_remote_launch(isend, &ispars1, cpu_left_sender) )
@@ -2641,7 +2610,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       iSenderParameters ispars1(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
                              ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
                              rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
-			     enumerate_ports,pre_frames);
+			     enumerate_ports,pre_frames,uniquePortComb);
 
       // start right sender
       if (rte_eal_remote_launch(isend, &ispars1, cpu_right_sender) )
@@ -2779,11 +2748,12 @@ iSenderParameters::iSenderParameters(class senderCommonParameters *cp_, int ip_v
                                      struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                                      uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
                                      uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
-				     unsigned enumerate_ports_,  uint32_t pre_frames_) :
+				     unsigned enumerate_ports_,  uint32_t pre_frames_,  ports32 *uniquePortComb_) :
   senderParameters(cp_, ip_version_, pkt_pool_, eth_id_, side_, dst_mac_, src_mac_, src_ipv4_, dst_ipv4_, src_ipv6_, dst_ipv6_, src_bg_, dst_bg_,
 		   num_dest_nets_, var_sport_, var_dport_, sport_min_, sport_max_, dport_min_, dport_max_) {
   enumerate_ports = enumerate_ports_;
   pre_frames = pre_frames_;
+  uniquePortComb = uniquePortComb_;
 }
 
 // sets the values of the data fields
@@ -2881,4 +2851,32 @@ void randomPermutation(ports32 *array, uint16_t src_min, uint16_t src_max, uint1
     array[random].port.src=sport;
     array[random].port.dst=dport;
   }
+}
+
+// allocate NUMA local memory and pre-generate random permutation -- Execute by the core of Initiator/Sender!
+int randomPermutationGenerator(void *par) {
+  // collecting input parameters:
+  class randomPermutationGeneratorParameters *p = (class randomPermutationGeneratorParameters *)par;
+  uint16_t src_min = p->src_min;
+  uint16_t src_max = p->src_max;
+  uint16_t dst_min = p->dst_min;
+  uint16_t dst_max = p->dst_max;
+  uint64_t hz = p->hz;		// just for giving info about execution time
+
+  uint64_t start_gen, end_gen;  // timestamps for the above purpose 
+  ports32 *array;	// array for storing the unique port number combinations
+  uint64_t size;	// sizes of the above array
+
+  size = (src_max-src_min+1)*(dst_max-dst_min+1);
+
+  array = (ports32 *) rte_malloc("Pre-geneated unique port number combinations", (sizeof(ports32))*size, 128);
+  if ( !array )
+    rte_exit(EXIT_FAILURE, "Error: Can't allocate memory for Pre-geneated unique port number combinations array!\n");
+  std::cerr << "Info: Pre-generating unique port number combinations... " ;
+  start_gen = rte_rdtsc();
+  randomPermutation(array,src_min,src_max,dst_min,dst_max);
+  end_gen = rte_rdtsc();
+  std::cerr << "Done. Lasted " << 1.0*(end_gen-start_gen)/hz << " seconds." << std::endl;
+
+  *(p->addr_of_arraypointer) = array;	// set the pointer in the caller
 }

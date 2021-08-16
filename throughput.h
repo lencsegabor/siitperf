@@ -155,6 +155,8 @@ public:
   atomicFourTuple *stateTable;	// pointer of the state table of the Responder
   unsigned valid_entries = 0;	// number of valid entries in the state table
 
+  ports32 *uniquePortComb; 	// array of pre-generated unique port number combinations (Responder-ports 4)
+
 
   // helper functions (see their description at their definition)
   int findKey(const char *line, const char *key);
@@ -207,6 +209,18 @@ int receive(void *par);
 // rreceive, store 4-tuple and count test frames: stateful version (Responder/Receiver)
 int rreceive(void *par);
 
+// allocate NUMA local memory and pre-generate random permutation -- Execute by the core of Initiator/Sender!
+int randomPermutationGenerator(void *par);
+
+// to store the parameters for randomPermutationGenerator
+class randomPermutationGeneratorParameters {
+  public:
+  ports32 **addr_of_arraypointer;	// pointer to the place, where the pointer is stored 
+  uint16_t src_min, src_max; 	// source port range
+  uint16_t dst_min, dst_max;	// destination port range
+  uint64_t hz;			// just for fun
+};
+
 // to store identical parameters for both senders
 class senderCommonParameters {
   public:
@@ -250,13 +264,14 @@ class iSenderParameters : public senderParameters {
   public:
   unsigned enumerate_ports;
   uint32_t pre_frames;
+  ports32 *uniquePortComb;   // array for pre-generated unique port number combinations (Responder-ports 4)*
 
   iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
                    uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
-		   unsigned enumerate_ports_, uint32_t pre_frames_);
+		   unsigned enumerate_ports_, uint32_t pre_frames_, ports32 *uniquePortComb_);
 };
 
 // to store differing parameters for each sender + par. for rsend
