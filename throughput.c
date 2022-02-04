@@ -5,7 +5,7 @@
  * Now it supports benchmarking of stateful NAT64 and stateful NAT44 
  * gateways, but stateful NAT66 and stateful NAT46 are out of scope.
  * 
- *  Copyright (C) 2019-2021 Gabor Lencse
+ *  Copyright (C) 2019-2022 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -324,8 +324,8 @@ int Throughput::readConfigFile(const char *filename) {
       }
     } else if ( (pos = findKey(line, "Stateful")) >= 0 ) {
       sscanf(line+pos, "%u", &stateful);
-      if ( stateful > 3 ) {
-        std::cerr << "Input Error: 'Stateful' must be 0, 1, 2, or 3." << std::endl;
+      if ( stateful > 2 ) {
+        std::cerr << "Input Error: 'Stateful' must be 0, 1, or 2." << std::endl;
         return -1;
       }
     } else if ( (pos = findKey(line, "Responder-ports")) >= 0 ) {
@@ -336,8 +336,8 @@ int Throughput::readConfigFile(const char *filename) {
       }
     } else if ( (pos = findKey(line, "Enumerate-ports")) >= 0 ) {
       sscanf(line+pos, "%u", &enumerate_ports);
-      if ( enumerate_ports > 4 ) {
-        std::cerr << "Input Error: 'Enumerate-ports' must be 0, 1, 2, 3 or 4." << std::endl;
+      if ( enumerate_ports > 3 ) {
+        std::cerr << "Input Error: 'Enumerate-ports' must be 0, 1, 2, or 3." << std::endl;
         return -1;
       }
     } else if ( nonComment(line) ) { // It may be too strict!
@@ -476,7 +476,7 @@ int Throughput::readCmdLine(int argc, const char *argv[]) {
       std::cerr << "Input Error: N-N*(n-m)/n < M (there are not enough foreground frames to fill the state table)." << std::endl;
       return -1;
     }
-    if ( enumerate_ports == 3 || enumerate_ports == 4 ) {
+    if ( enumerate_ports == 3 ) {
       // unique port number combinations are required for each foreground preliminary frame
       // check if there are enough of them
       uint64_t portNumberCombinations;	// theoretically may be equal with 2**32, thus uint32_t is not enough
@@ -489,22 +489,6 @@ int Throughput::readCmdLine(int argc, const char *argv[]) {
       if ( portNumberCombinations < eff_pre_frames ) {
         std::cerr << "Input Error: There are not enough unique port number combinations for each (foregound) preliminary frames." << std::endl;
         return -1;
-      }
-      if (  enumerate_ports == 3 ) {
-        if ( portNumberCombinations < CHECKING_VERY_LOW*eff_pre_frames ) {
-          std::cerr << "Warning: To avoid serious frame rate degradation of the Tester in the preliminary phase, please use random permutation for ensuring unique port number combination for each foreground preliminary frame. (Enumerate-ports 4)" << std::endl;
-        }
-        else if ( portNumberCombinations < CHECKING_A_BIT_LOW*eff_pre_frames ) {
-          std::cerr << "Warning: For higher frame rate of the Tester in the preliminary phase, please consider using random permutation to ensure unique port number combination for each foreground preliminary frame. (Enumerate-ports 4)" << std::endl;
-        }
-      }
-      if (  enumerate_ports == 4 && portNumberCombinations > SIGNIFICANT_NUMBER ) {
-        if ( portNumberCombinations > RAND_PERM_VERY_HIGH*eff_pre_frames ) {
-          std::cerr << "Warning: To avoid serious delay in the preliminary phase, please use the accounting of port number combinations for ensuring unique port number combination for each foreground preliminary frame. (Enumerate-ports 3)" << std::endl;
-        }
-        else if ( portNumberCombinations > RAND_PERM_A_BIT_HIGH*eff_pre_frames ) {
-          std::cerr << "Warning: For lower delay in the preliminary phase, please consider the accounting of port number combinations for ensuring unique port number combination for each foreground preliminary frame. (Enumerate-ports 3)" << std::endl;
-        }
       }
     }
     if ( responder_ports && state_table_size==1 ) {
@@ -712,7 +696,7 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
   // prepare further values for testing
   hz = rte_get_timer_hz();		// number of clock cycles per second
 
-  if ( stateful && enumerate_ports == 4 ) {
+  if ( stateful && enumerate_ports == 3 ) {
     // Pre-generation of unique source and destination port numbers is required
 
     // collect port numbers and lcore info
@@ -1365,7 +1349,7 @@ int isend(void *par) {
   uint16_t sport_max = p->sport_max;
   uint16_t dport_min = p->dport_min;
   uint16_t dport_max = p->dport_max;
-  ports32 *uniquePortComb = p->uniquePortComb;	// array of pre-generated unique port number combinations (Responder-ports 4)
+  ports32 *uniquePortComb = p->uniquePortComb;	// array of pre-generated unique port number combinations (Enumerate-ports 3)
 
   unsigned enumerate_ports = p->enumerate_ports;
 
@@ -1374,7 +1358,6 @@ int isend(void *par) {
   // further local variables
   uint64_t frames_to_send;
   uint64_t sent_frames=0; 	// counts the number of sent frames
-  bool *portCombination=0; 	// pointer to a 64k x 64k array for accounting port number combinations (Responder-ports 3)
   ports32 *uniquePC=uniquePortComb;	// working pointer to the current element of uniquePortComb
 
   frames_to_send = p->pre_frames;	// use the specified value for sending preliminary frames
@@ -1515,12 +1498,7 @@ int isend(void *par) {
           e_sport = sport_max;
           e_dport = dport_max;
 	  break;
-	case 3: // unique pseudorandom port number pairs are guarandteed by accounting
-	  portCombination = (bool *) rte_zmalloc("Initiator/Sender's unique port number combination accounting table", 4294967296, 128); // allocate 2**32 bytes
-	  if ( !portCombination )
-            rte_exit(EXIT_FAILURE, "Error: Initiator/Sender can't allocate memory for unique port number combination accounting table!\n");
-	  break;
-	case 4: 
+	case 3: 
 	  if ( !uniquePortComb )
             rte_exit(EXIT_FAILURE, "Error: Initiator/Sender received a NULL pointer to the array of pre-prepaired unique random port numbers!\n");
 	  // unique pseudorandom port number pairs are guarandteed by pre-prepaired random permutation
@@ -1580,18 +1558,7 @@ int isend(void *par) {
               chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
               chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
               break;
-            case 3: // a unique pseudorandom port number pair is generated 
-	      uint32_t index;
-	      do {
-                sp = uni_dis_sport(gen_sport);
-                dp = uni_dis_dport(gen_dport);
-	        index = (sp<<16)+dp;
-	      } while ( portCombination[index] );  // hazard of too many iterations!
-	      portCombination[index] = 1; 	    // mark this combination as used
-              chksum += *udp_sport = htons(sp);     // set source port and add to checksum -- corrected
-              chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
-	      break;
-	    case 4:
+	    case 3: // the next unique pseudorandom port number pair is taken
 	      sp = uniquePC->port.src;	// read source port number
 	      dp = uniquePC->port.dst;	// read destination port number
 	      uniquePC++;		// increase pointer: no check needed, we have surely enough
@@ -1797,8 +1764,6 @@ int isend(void *par) {
 
   printf("%s frames sent: %lu\n", side, sent_frames);
 
-  if ( portCombination )
-    rte_free(portCombination); 	// free the 64k x 64k array for accounting port number combinations
   if ( uniquePortComb ) 
     rte_free(uniquePortComb);	// free the array for pre-generated unique port number combinations
   return 0;

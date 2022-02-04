@@ -5,7 +5,7 @@
  * Now it supports benchmarking of stateful NAT64 and stateful NAT44
  * gateways, but stateful NAT66 and stateful NAT46 are out of scope.
  *
- *  Copyright (C) 2019-2021 Gabor Lencse
+ *  Copyright (C) 2019-2022 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -120,9 +120,8 @@ public:
   //  1,2: yes, sport is the low order, dport is the high order counter, their min and max values are honored
   //    1: port number combinations are enumerated in inreasing order
   //    1: port number combinations are enumerated in dereasing order
-  //  3,4: unique random port number combinations are used, their min and max values are honored
-  //    3: uniqueness is ensured by accounting (and generating different ones, if needed)
-  //    4: uniqueness is ensured by using pre-generated random permutation  
+  //    3: unique random port number combinations are used, their min and max values are honored
+  //       uniqueness is ensured by using pre-generated random permutation  
   unsigned enumerate_ports;
 
   // positional parameters from command line
@@ -155,7 +154,7 @@ public:
   atomicFourTuple *stateTable;	// pointer of the state table of the Responder
   unsigned valid_entries = 0;	// number of valid entries in the state table
 
-  ports32 *uniquePortComb = 0; 	// array of pre-generated unique port number combinations (Responder-ports 4)
+  ports32 *uniquePortComb = 0; 	// array of pre-generated unique port number combinations (Enumerate-ports 3)
 
 
   // helper functions (see their description at their definition)
