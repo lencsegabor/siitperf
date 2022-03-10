@@ -460,8 +460,8 @@ int Throughput::readCmdLine(int argc, const char *argv[]) {
       std::cerr << "Input Error: the value of 'T' (global timeout for the preliminary frames) must be between 1 and 2000." << std::endl;
       return -1;
     }
-    if ( sscanf(argv[11], "%u", &pre_delay) != 1 || pre_delay < 1 || pre_delay > 3000000 ) { // hack: raised from 100000 to 3000000
-      std::cerr << "Input Error: the value of 'D' (delay caused by the preliminary phase) must be between 1 and 3000000." << std::endl;
+    if ( sscanf(argv[11], "%u", &pre_delay) != 1 || pre_delay < 1 || pre_delay > 100000000 ) { 
+      std::cerr << "Input Error: the value of 'D' (delay caused by the preliminary phase) must be between 1 and 100000000." << std::endl;
       return -1;
     }
     if ( ((uint64_t)1000)*pre_frames/pre_rate+pre_timeout > pre_delay ) {
