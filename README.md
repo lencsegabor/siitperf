@@ -163,7 +163,7 @@ __R__: the frame rate, at which the test frames are sent during the preliminary 
 
 __T__: the global timeout for the preliminary frames (in milliseconds, 1 – 2000)
 
-__D__: the overall delay caused by the preliminary phase (in milliseconds, 1 – 100,000)
+__D__: the overall delay caused by the preliminary phase (in milliseconds, 1 – 100,000,000)
 
 The execution of the measurements are supported by the following scripts (they support only stateless tests):
 
