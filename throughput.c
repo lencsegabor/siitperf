@@ -2390,6 +2390,8 @@ int rreceive(void *par) {
 
 // performs throughput (or frame loss rate) measurement
 void Throughput::measure(uint16_t leftport, uint16_t rightport) {
+  time_t now; // needed for printing out a timestamp in Info message
+
   switch ( stateful ) {
     case 0:	// stateless test is to be performed
       {
@@ -2444,7 +2446,8 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
           std::cout << "Error: could not start Left Receiver." << std::endl;
       }
     
-      std::cout << "Info: Testing started." << std::endl;
+      now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      std::cout << "Info: Testing initiated at " << std::put_time(localtime(&now), "%F %T") << std::endl;
     
       // wait until active senders and receivers finish 
       if ( forward ) {
@@ -2485,8 +2488,9 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       // start right receiver
       if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_right_receiver) )
         std::cout << "Error: could not start Responder's Receiver." << std::endl;
-  
-      std::cout << "Info: Preliminary frame sending initiated." << std::endl;
+ 
+      now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      std::cout << "Info: Preliminary frame sending initiated at " << std::put_time(localtime(&now), "%F %T") << std::endl;
     
       // wait until active senders and receivers finish 
       rte_eal_wait_lcore(cpu_left_sender);
@@ -2547,7 +2551,8 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
           std::cout << "Error: could not start Left Receiver." << std::endl;
       }
 
-      std::cout << "Info: Testing started." << std::endl;
+      now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      std::cout << "Info: Testing initiated at " << std::put_time(localtime(&now), "%F %T") << std::endl;
 
       // wait until active senders and receivers finish
       if ( forward ) {
@@ -2589,7 +2594,8 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_left_receiver) )
         std::cout << "Error: could not start Responder's Receiver." << std::endl;
 
-      std::cout << "Info: Preliminary frame sending started." << std::endl;
+      now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      std::cout << "Info: Preliminary frame sending initiated at " << std::put_time(localtime(&now), "%F %T") << std::endl;
 
       // wait until active senders and receivers finish
       rte_eal_wait_lcore(cpu_right_sender);
@@ -2650,7 +2656,8 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
           std::cout << "Error: could not start Right Receiver." << std::endl;
       }
 
-      std::cout << "Info: Testing started." << std::endl;
+      now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      std::cout << "Info: Testing initiated at " << std::put_time(localtime(&now), "%F %T") << std::endl;
 
       // wait until active senders and receivers finish
       if ( reverse ) {

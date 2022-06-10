@@ -25,6 +25,8 @@
 #include <numa.h>
 #include <random>
 #include <iostream>
+#include <iomanip>
+#include <chrono>
 #include <algorithm>
 #include <atomic>
 #include <rte_lcore.h>
