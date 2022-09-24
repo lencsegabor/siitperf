@@ -1,8 +1,8 @@
 siitperf
 ========
 
-Siitperf is an RFC 8219 compliant SIIT (stateless NAT64) tester written in C++ using DPDK, and it can be used under the Linux operating system.
-It is extended to support stateful NAT64 and stataful NAT44 (also called NAPT) tests, too. Stateful extension is in very alpha stage, and only siitperf-tp supports it (see below).
+Siitperf is an RFC 8219 compliant SIIT and stateful NAT64/NAT44 tester written in C++ using DPDK, and it can be used under the Linux operating system.
+Originally it was only a SIIT tester (hence its name) and it was extended to support stateful NAT64 and stataful NAT44 (also called NAPT) tests, too. Stateful extension is in very alpha stage, and only siitperf-tp supports it (see below).
 
 Introduction
 ------------
