@@ -47,7 +47,7 @@ CC = g++
 SRCS-y := main-tp.c throughput.c
 
 # CFLAGS += -g
-CFLAGS += -O3
+CFLAGS += -O2
 # CFLAGS += $(WERROR_FLAGS)
 LDLIBS += -lnuma -latomic
 

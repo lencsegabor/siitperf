@@ -4,8 +4,9 @@
  * Extension for stateful tests was done in 2021.
  * Now it supports benchmarking of stateful NAT64 and stateful NAT44
  * gateways, but stateful NAT66 and stateful NAT46 are out of scope.
+ * Extension for multiple IP addresses was done in 2023.
  *
- *  Copyright (C) 2019-2022 Gabor Lencse
+ *  Copyright (C) 2019-2023 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -37,20 +38,36 @@ struct fourTuple {
 // atomic 4-tuple for to ensure consistent reading and writing of the state table of the Responder
 typedef std::atomic<fourTuple> atomicFourTuple;
 
-// port pair for unique port number combinations using random permutation
-struct portPair {
-  uint16_t src;	// source port number
-  uint16_t dst;	// destination port number
+// port pair for unique port number or IP address (part) combinations using random permutation
+struct fieldPair {
+  uint16_t src;	// source port number or IP address (part)
+  uint16_t dst;	// destination port number or IP address (part)
 };
 
-// a union facilitating the access of the portpair as a 32-bit number
-union ports32 {
-  portPair port;
+// a union facilitating the access of the portpair or IP address parts pair as a 32-bit number
+union bits32 {
+  fieldPair field;
   uint32_t data;
 };
+struct fT { // a reduced four tuple that contains only the changing part of the IP addresses
+  uint16_t sip;
+  uint16_t dip;
+  uint16_t sport;
+  uint16_t dport;
+};
 
-// function prepares unique random port number combinations by enumeration and then random permutation
-void randomPermutation(ports32 *array, uint16_t src_min, uint16_t src_max, uint16_t dst_min, uint16_t dst_max);
+// a union facilitating the access of the IP address parts pair and port pair as a 64-bit number
+union bits64 {
+  fT ft;
+  uint64_t data;
+};
+
+// function prepares unique random IP address or port number combinations by enumeration and then random permutation
+void randomPermutation32(bits32 *array, uint16_t src_min, uint16_t src_max, uint16_t dst_min, uint16_t dst_max);
+
+// function prepares unique random IP address and port number combinations by enumeration and then random permutation
+void randomPermutation64(bits32 *array, uint16_t si_min, uint16_t si_max, uint16_t di_min, uint16_t di_max,
+                         uint16_t sp_min, uint16_t sp_max, uint16_t dp_min, uint16_t dp_max);
 
 // the main class for siitperf
 // data members are used for storing parameters
@@ -106,6 +123,21 @@ public:
   uint16_t rev_dport_min;       // minumum value for destination port
   uint16_t rev_dport_max;       // maximum value for destination port
 
+  // encoding: 0: use fix IP addresses as defined in RFC 2544, 1: increase, 2: decrease, 3: pseudorandom
+  unsigned ip_left_varies;      // control value for fixed or variable left side IP address
+  unsigned ip_right_varies;     // control value for fixed or variable left side IP address
+  unsigned ip_varies;           // derived logical value: at least one IP address has to be changed?
+
+  uint16_t ip_left_min;		// minumum value for the changing 16-bit of the left side IP address
+  uint16_t ip_left_max;		// maximum value for the changing 16-bit of the left side IP address
+  uint16_t ip_right_min;	// minumum value for the changing 16-bit of the right side IP address
+  uint16_t ip_right_max;	// maxumum value for the changing 16-bit of the right side IP address
+ 
+  uint16_t ipv4_left_offset;	// offset from the begining of the left side IPv4 address to its varying 16-bit
+  uint16_t ipv4_right_offset;	// offset from the begining of the right side IPv4 address to its varying 16-bit
+  uint16_t ipv6_left_offset;	// offset from the begining of the left side IPv6 address to its varying 16-bit
+  uint16_t ipv6_right_offset;	// offset from the begining of the right side IPv6 address to its varying 16-bit
+
   // encoding: 0: stateless tests; 1,2: stateful, Responder is on the 1: right side, 2: left side
   unsigned stateful;            // control the type (stateless or stateful) of the DUT
 
@@ -113,16 +145,26 @@ public:
   //           1: select a 4-tuple from the state table in increasing order (to save computing power)
   //           2: select a 4-tuple from the state table in decreasing order (to save computing power)
   //           3: select a 4-tuple from the state table in a pseudorandom way (to be RFC 4814 compliant)
-  unsigned responder_ports;     // how to select a 4-tuple for test frame generation
+  unsigned responder_tuples;     // how to select a 4-tuple for test frame generation
 
   // encoding: 
   //    0: no, use port numbers as specified by other parameters
   //  1,2: yes, sport is the low order, dport is the high order counter, their min and max values are honored
   //    1: port number combinations are enumerated in inreasing order
-  //    1: port number combinations are enumerated in dereasing order
+  //    2: port number combinations are enumerated in dereasing order
   //    3: unique random port number combinations are used, their min and max values are honored
   //       uniqueness is ensured by using pre-generated random permutation  
   unsigned enumerate_ports;
+
+  // encoding:
+  //    0: no, use IP addresses as specified by other parameters
+  //  1,2: yes, source IP is the low order, destination IP is the high order counter, their min and max values are honored
+  //    1: IP address combinations are enumerated in inreasing order
+  //    2: IP address combinations are enumerated in dereasing order
+  //    3: unique IP address combinations are used, their min and max values are honored
+  //       uniqueness is ensured by using pre-generated random permutation
+  unsigned enumerate_ips;
+
 
   // positional parameters from command line
   uint16_t ipv6_frame_size;	// size of the frames carrying IPv6 datagrams (including the 4 bytes of the FCS at the end) 
@@ -154,7 +196,9 @@ public:
   atomicFourTuple *stateTable;	// pointer of the state table of the Responder
   unsigned valid_entries = 0;	// number of valid entries in the state table
 
-  ports32 *uniquePortComb = 0; 	// array of pre-generated unique port number combinations (Enumerate-ports 3)
+  bits32 *uniquePortComb = 0; 	// array of pre-generated unique port number combinations (Enumerate-ports 3, but Enumerate-ips 0)
+  bits32 *uniqueIpComb = 0; 	// array of pre-generated unique IP address combinations (Enumerate-ips 3, but Enumerate-ports 0)
+  bits64 *uniqueFtComb = 0; 	// array of pre-generated unique four tuple combinations (Enumerate-ips 3, Enumerate-ports 3)
 
 
   // helper functions (see their description at their definition)
@@ -163,6 +207,7 @@ public:
   int readCmdLine(int argc, const char *argv[]);
   int init(const char *argv0, uint16_t leftport, uint16_t rightport);
   virtual int senderPoolSize(int numDestNets, int varport);
+  virtual int senderPoolSize(int numDestNets, int varport, int ip_varies);
   void numaCheck(uint16_t port, const char *port_side, int cpu, const char *cpu_name);
 
   // perform throughput measurement
@@ -196,8 +241,14 @@ void check_tsc(int cpu, const char *cpu_name);
 // send test frame: stateless version
 int send(void *par);
 
-// send test frame: stateful version (Initiator/Sender) -- like send, plus support port number enumeration (with a single dest. net.)
+// send test frame: stateless version using multiple source and/or destination IP address (does not support multiple networks)
+int msend(void *par);
+
+// send test frame: stateful version (Initiator/Sender) -- like send, plus supports port number enumeration (with a single dest. net.)
 int isend(void *par);
+
+// send test frame: stateful version (Initiator/Sender) -- like msend, plus supports IP address enumeration.
+int imsend(void *par);
 
 // send test frame: stateful version (Responder/Sender)
 int rsend(void *par);
@@ -208,16 +259,29 @@ int receive(void *par);
 // rreceive, store 4-tuple and count test frames: stateful version (Responder/Receiver)
 int rreceive(void *par);
 
-// allocate NUMA local memory and pre-generate random permutation -- Execute by the core of Initiator/Sender!
-int randomPermutationGenerator(void *par);
+// allocate NUMA local memory and pre-generate random permutation -- Executed by the core of Initiator/Sender!
+int randomPermutationGenerator32(void *par);
 
-// to store the parameters for randomPermutationGenerator
-class randomPermutationGeneratorParameters {
+// allocate NUMA local memory and pre-generate random permutation -- Executed by the core of Initiator/Sender!
+int randomPermutationGenerator64(void *par);
+
+// to store the parameters for randomPermutationGenerator32
+class randomPermutationGeneratorParameters32 {
   public:
-  ports32 **addr_of_arraypointer;	// pointer to the place, where the pointer is stored 
-  uint16_t src_min, src_max; 	// source port range
-  uint16_t dst_min, dst_max;	// destination port range
-  uint64_t hz;			// just for fun
+  bits32 **addr_of_arraypointer;	// pointer to the place, where the pointer is stored 
+  uint16_t src_min, src_max; 	// source range
+  uint16_t dst_min, dst_max;	// destination range
+  char *type;			// just to display information (if "port number" or "IP address" combinations)
+  uint64_t hz;			// just to be able to display the execution time
+};
+
+// to store the parameters for randomPermutationGenerator64
+class randomPermutationGeneratorParameters64 {
+  public:
+  bits64 **addr_of_arraypointer;        	// pointer to the place, where the pointer is stored
+  uint16_t si_min, si_max, di_min, di_max;  	// ranges for IP address parts
+  uint16_t sp_min, sp_max, dp_min, dp_max;  	// ranges for port numbers
+  uint64_t hz;                  // just to be able to display the execution time
 };
 
 // to store identical parameters for both senders
@@ -258,19 +322,86 @@ class senderParameters {
 	           uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_);
 };
 
+
+// to store differing parameters for each sender -num_dest_nets + par. for msend
+class mSenderParameters {
+  public:
+  class senderCommonParameters *cp;
+  int ip_version;
+  rte_mempool *pkt_pool;
+  uint8_t eth_id;
+  const char *side;
+  struct ether_addr *dst_mac, *src_mac;
+  uint32_t *src_ipv4, *dst_ipv4;
+  struct in6_addr *src_ipv6, *dst_ipv6;
+  struct in6_addr *src_bg, *dst_bg;
+  // excluded: uint16_t num_dest_nets;
+  unsigned var_sip, var_dip;
+  uint16_t sip_min, sip_max, dip_min, dip_max;
+  uint16_t src_ipv4_offset, dst_ipv4_offset, src_ipv6_offset, dst_ipv6_offset;
+  unsigned var_sport, var_dport;
+  uint16_t sport_min, sport_max, dport_min, dport_max;
+
+  mSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+                   struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
+                   struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
+                   unsigned var_sip_, unsigned var_dip_,
+                   uint16_t sip_min_, uint16_t sip_max_, uint16_t dip_min_, uint16_t dip_max,
+                   uint16_t src_ipv4_offset_, uint16_t dst_ipv4_offset_, uint16_t src_ipv6_offset_, uint16_t dst_ipv6_offset,
+                   unsigned var_sport_, unsigned var_dport_,
+	           uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_);
+};
+
 // to store differing parameters for each sender + par. for isend
 class iSenderParameters : public senderParameters {
   public:
   unsigned enumerate_ports;
   uint32_t pre_frames;
-  ports32 *uniquePortComb;   // array for pre-generated unique port number combinations (Responder-ports 4)*
+  bits32 *uniquePortComb;   // array for pre-generated unique port number combinations (Enumerate:-ports 3)
 
   iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
                    uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
-		   unsigned enumerate_ports_, uint32_t pre_frames_, ports32 *uniquePortComb_);
+		   unsigned enumerate_ports_, uint32_t pre_frames_, bits32 *uniquePortComb_);
+};
+
+
+// to store differing parameters for each sender -num_dest_nets + par. for imsend
+class imSenderParameters {
+  public:
+  class senderCommonParameters *cp;
+  int ip_version;
+  rte_mempool *pkt_pool;
+  uint8_t eth_id;
+  const char *side;
+  struct ether_addr *dst_mac, *src_mac;
+  uint32_t *src_ipv4, *dst_ipv4;
+  struct in6_addr *src_ipv6, *dst_ipv6;
+  struct in6_addr *src_bg, *dst_bg;
+  // excluded: uint16_t num_dest_nets;
+  unsigned var_sip, var_dip;
+  uint16_t sip_min, sip_max, dip_min, dip_max;
+  uint16_t src_ipv4_offset, dst_ipv4_offset, src_ipv6_offset, dst_ipv6_offset;
+  unsigned var_sport, var_dport;
+  uint16_t sport_min, sport_max, dport_min, dport_max;
+  unsigned enumerate_ips;
+  unsigned enumerate_ports;
+  uint32_t pre_frames;
+  bits32 *uniqueIpComb;   // array for pre-generated unique IP address (part) combinations (Enumerate-ips 3, but Enumerate-ports 0)
+  bits64 *uniqueFtComb;   // array for pre-generated unique 4-tuple (part) combinations (Enumerate-ips 3, Enumerate-ports 3)
+
+  imSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+                   struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
+                   struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
+                   unsigned var_sip_, unsigned var_dip_,
+                   uint16_t sip_min_, uint16_t sip_max_, uint16_t dip_min_, uint16_t dip_max,
+                   uint16_t src_ipv4_offset_, uint16_t dst_ipv4_offset_, uint16_t src_ipv6_offset_, uint16_t dst_ipv6_offset,
+                   unsigned var_sport_, unsigned var_dport_,
+	           uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
+		   unsigned enumerate_ips_, unsigned enumerate_ports_, uint32_t pre_frames_, 
+		   bits32 *uniqueIpComb_, bits64 *uniqueFtComb_);
 };
 
 // to store differing parameters for each sender + par. for rsend
@@ -278,14 +409,14 @@ class rSenderParameters : public senderParameters {
   public:
   unsigned state_table_size;    // the number of entries in the state table
   atomicFourTuple *stateTable; 	// the 4-tuples are only read
-  unsigned responder_ports;     // how to select a 4-tuple for test frame generation
+  unsigned responder_tuples;     // how to select a 4-tuple for test frame generation
 
   rSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
                    uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
-                   unsigned state_table_size_, atomicFourTuple *stateTable_, unsigned responder_ports_);
+                   unsigned state_table_size_, atomicFourTuple *stateTable_, unsigned responder_tuples_);
 };
 
 // to store parameters for each receiver 
