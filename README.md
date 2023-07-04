@@ -201,7 +201,16 @@ Further Information
 -------------------
 
 For further information on the design, implementation and initial peformance estimation of siitperf, please read our (open access) paper:
+
 G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateless NAT64 Gateways", _IEICE Transactions on Communications_, vol. E104-B, no.2, pp. 128-140. February 1, 2021. DOI: 10.1587/transcom.2019EBN0010, avilable: http://doi.org/10.1587/transcom.2019EBN0010 
+
+The above paper documents the original version of siitperf, which used fixed port numbers. Its extension to support pseudorandom port numbers is documented in the following (open access) paper:
+
+G. Lencse, "Adding RFC 4814 Random Port Feature to Siitperf: Design, Implementation and Performance Estimation", _International Journal of Advances in Telecommunications, Electrotechnics, Signals and Systems_, vol 9, no 3, pp. 18-26, 2020, DOI: 10.11601/ijates.v9i3.291, available: https://doi.org/10.11601/ijates.v9i3.291
+
+And its extension to support stateful NAT64/NAT44 measurements is documented in the following (open access) paper:
+
+G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateful NATxy Gateways: Theory and Practice of Extending Siitperf for Stateful Tests", Computer Communications, vol. 172, no. 1, pp. 75-88, August 1, 2022, DOI: 10.1016/j.comcom.2022.05.028, available: https://doi.org/10.1016/j.comcom.2022.05.028
 
 Any feedbacks (including questions, feature requests, comments, suggestions, etc.) are welcomed by the author.
 
