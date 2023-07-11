@@ -1286,7 +1286,7 @@ int send(void *par) {
   } // end of optimized code for fixed port numbers
   else {
 
-//  printf("%s: old sender is running, varport is on.\n", side, sent_frames);
+  printf("%s: old sender is running, varport is on.\n", side, sent_frames);
 
     // implementation of varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
     // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
@@ -1563,12 +1563,9 @@ int send(void *par) {
 
 // sends Test Frames for throughput (or frame loss rate) measurement using multiple source and/or destination IP addresses
 int msend(void *par) {
-  //  printf("DEBUG: msend() is just started, parameters will be collected.\n");
   // collecting input parameters:
-  //  printf("DEBUG: msend() the value of the 'par' pointer is: %p.\n", par);
   class mSenderParameters *p = (class mSenderParameters *)par;
   class senderCommonParameters *cp = p->cp;
-  //  printf("DEBUG: msend() the value of the common parameters pointer (cp) is: %p.\n", cp);
 
   // parameters directly correspond to the data members of class Throughput
   uint16_t ipv6_frame_size = cp->ipv6_frame_size;
@@ -1580,7 +1577,6 @@ int msend(void *par) {
   uint64_t hz = cp->hz;
   uint64_t start_tsc = cp->start_tsc;
 
-  //  printf("DEBUG: msend() common parameters were collected successfully.\n");
 
   // parameters which are different for the Left sender and the Right sender
   int ip_version = p->ip_version;
@@ -1614,8 +1610,6 @@ int msend(void *par) {
   uint16_t sport_max = p->sport_max;
   uint16_t dport_min = p->dport_min;
   uint16_t dport_max = p->dport_max;
-
-  //  printf("DEBUG: msend() all parameters were collected successfully.\n");
 
 
   // further local variables
@@ -3666,15 +3660,24 @@ int rreceive(void *par) {
 void Throughput::measure(uint16_t leftport, uint16_t rightport) {
   time_t now; // needed for printing out a timestamp in Info message
 
-  // printf("DEBUG: measure() ip_varies: %i\n", ip_varies);
+  // Several parameters are provided to the various sender functions (send, isend, msend, imsend) 
+  // and receiver functions (receive, ) in the following 'struct'-s.
+  // They are declared here so that they will not be overwritten in the stack when the program leaves an 'if' block.
+  senderCommonParameters scp1, scp2;
+  senderParameters spars1, spars2; 
+  iSenderParameters ispars;
+  mSenderParameters mspars1, mspars2;
+  imSenderParameters imspars;
+  receiverParameters rpars1, rpars2;
+  rReceiverParameters rrpars1, rrpars2;
+  rSenderParameters rspars;
 
   switch ( stateful ) {
     case 0:	// stateless test is to be performed
       {
-  // printf("DEBUG: measure() case 0 is running...\n");
 
       // set common parameters for senders
-      senderCommonParameters scp(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc);
+      scp1=senderCommonParameters(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc);
 
       if ( forward ) {	// Left to Right direction is active
         // set individual parameters for the left sender
@@ -3686,33 +3689,32 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
         if ( !ip_varies ) { // use traditional single source and destination IP addresses
      
           // initialize the parameter class instance
-          senderParameters spars(&scp,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-                                 fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
-                                  
+          spars1=senderParameters(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                  ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                                  fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
           // start left sender
-          if ( rte_eal_remote_launch(send, &spars, cpu_left_sender) )
+          if ( rte_eal_remote_launch(send, &spars1, cpu_left_sender) )
             std::cout << "Error: could not start Left Sender." << std::endl;
 
         } else { // use multiple source and/or destination IP addresses
 
           // initialize the parameter class instance
-          mSenderParameters mspars(&scp,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,
-                                 ip_left_varies,ip_right_varies,ip_left_min,ip_left_max,ip_right_min,ip_right_max,
-                                 ipv4_left_offset,ipv4_right_offset,ipv6_left_offset,ipv6_right_offset,
-                                 fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
+          mspars1=mSenderParameters(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                    ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,
+                                    ip_left_varies,ip_right_varies,ip_left_min,ip_left_max,ip_right_min,ip_right_max,
+                                    ipv4_left_offset,ipv4_right_offset,ipv6_left_offset,ipv6_right_offset,
+                                    fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
 
           // start left sender
-          if ( rte_eal_remote_launch(msend, &mspars, cpu_left_sender) )
+          if ( rte_eal_remote_launch(msend, &mspars1, cpu_left_sender) )
             std::cout << "Error: could not start Left Sender." << std::endl;
         }
 
         // set parameters for the right receiver
-        receiverParameters rpars(finish_receiving,rightport,"Forward");
+        rpars1=receiverParameters(finish_receiving,rightport,"Forward");
     
         // start right receiver
-        if ( rte_eal_remote_launch(receive, &rpars, cpu_right_receiver) )
+        if ( rte_eal_remote_launch(receive, &rpars1, cpu_right_receiver) )
           std::cout << "Error: could not start Right Receiver." << std::endl;
       }
     
@@ -3726,34 +3728,33 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
         if ( !ip_varies ) { // use traditional single source and destination IP addresses
     
           // initialize the parameter class instance
-          senderParameters spars(&scp,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                                 rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
-    
+          spars2=senderParameters(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                  ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                                  rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
           // start right sender
-          if (rte_eal_remote_launch(send, &spars, cpu_right_sender) )
+          if (rte_eal_remote_launch(send, &spars2, cpu_right_sender) )
             std::cout << "Error: could not start Right Sender." << std::endl;
     
         } else { // use multiple source and/or destination IP addresses
 
           // initialize the parameter class instance
-          mSenderParameters mspars(&scp,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,
-                                 ip_right_varies,ip_left_varies,ip_right_min,ip_right_max,ip_left_min,ip_left_max,
-                                 ipv4_right_offset,ipv4_left_offset,ipv6_right_offset,ipv6_left_offset,
-                                 rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
+          mspars2=mSenderParameters(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                    ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,
+                                    ip_right_varies,ip_left_varies,ip_right_min,ip_right_max,ip_left_min,ip_left_max,
+                                    ipv4_right_offset,ipv4_left_offset,ipv6_right_offset,ipv6_left_offset,
+                                    rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
 
           // start right sender
-          if (rte_eal_remote_launch(msend, &mspars, cpu_right_sender) )
+          if (rte_eal_remote_launch(msend, &mspars2, cpu_right_sender) )
             std::cout << "Error: could not start Right Sender." << std::endl;
 
         }
 
         // set parameters for the left receiver
-        receiverParameters rpars(finish_receiving,leftport,"Reverse");
+        rpars2=receiverParameters(finish_receiving,leftport,"Reverse");
 
         // start left receiver
-        if ( rte_eal_remote_launch(receive, &rpars, cpu_left_receiver) )
+        if ( rte_eal_remote_launch(receive, &rpars2, cpu_left_receiver) )
           std::cout << "Error: could not start Left Receiver." << std::endl;
 
       }
@@ -3775,9 +3776,8 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       }
     case 1:	// stateful test: Initiator is on the left side, Responder is on the right side
       { 
-  // printf("DEBUG: measure() case 1 is running...\n");
       // set "common" parameters (currently not common with anyone, only code is reused; it will be common, when sending test frames)
-      senderCommonParameters scp1(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
+      scp1=senderCommonParameters(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
 
       // set "individual" parameters for the sender of the Initiator residing on the left side
   
@@ -3785,22 +3785,22 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       ipQuad ipq(ip_left_version,ip_right_version,&ipv4_left_real,&ipv4_right_real,&ipv4_left_virtual,&ipv4_right_virtual,
                  &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
 
-      if ( !( ip_varies || enumerate_ips ) ) { // use traditional single source and destination IP addresses
+      if ( !ip_varies  ) { // use traditional single source and destination IP addresses
   
         // initialize the parameter class instance for premiminary phase
-        iSenderParameters ispars1(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                                  ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-                                  fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-  			          enumerate_ports,pre_frames,uniquePortComb);
+        ispars=iSenderParameters(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                                 fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
+  			         enumerate_ports,pre_frames,uniquePortComb);
                                 
         // start left sender
-        if ( rte_eal_remote_launch(isend, &ispars1, cpu_left_sender) )
+        if ( rte_eal_remote_launch(isend, &ispars, cpu_left_sender) )
           std::cout << "Error: could not start Initiator's Sender." << std::endl;
 
       } else { // use multiple source and/or destination IP addresses (because ip_varies OR enumerate_ips)
 
         // initialize the parameter class instance for premiminary phase
-        imSenderParameters imspars(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+        imspars=imSenderParameters(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
                                    ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,
                                    ip_left_varies,ip_right_varies,ip_left_min,ip_left_max,ip_right_min,ip_right_max,
                                    ipv4_left_offset,ipv4_right_offset,ipv6_left_offset,ipv6_right_offset,
@@ -3813,7 +3813,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       } 
   
       // set parameters for the right receiver
-      rReceiverParameters rrpars1(finish_receiving_pre,rightport,"Preliminary",state_table_size,&valid_entries,&stateTable); 
+      rrpars1=rReceiverParameters(finish_receiving_pre,rightport,"Preliminary",state_table_size,&valid_entries,&stateTable); 
   
       // start right receiver
       if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_right_receiver) )
@@ -3831,23 +3831,21 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       else
       	std::cout << "Info: Preliminary phase finished." << std::endl;
 
-  // printf("DEBUG: measure() case 1 real test may follow...\n");
       // Now the real test may follow.
 
       // set "common" parameters 
-      senderCommonParameters scp2(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc); 
+      scp2=senderCommonParameters(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc); 
   
       if ( forward ) {  // Left to right direction is active
 
-        if ( !ip_varies ) { // use traditional single source and destination IP addresses (no enumeration in phase 2)
+        if ( !ip_varies ) { // use traditional single source and destination IP addresses
 
           // set "individual" parameters for the (normal) sender of the Initiator residing on the left side
     
           // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
-          senderParameters spars2(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+          spars2=senderParameters(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
                                   ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
                                   fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
-  // printf("DEBUG: measure() scp2 address is: %p\n",&scp2);
     
           // start left sender
           if ( rte_eal_remote_launch(send, &spars2, cpu_left_sender) )
@@ -3856,23 +3854,19 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
         } else { // use multiple source and/or destination IP addresses
  
           // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
-          mSenderParameters mspars(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+          mspars2=mSenderParameters(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
                                    ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,
                                    ip_left_varies,ip_right_varies,ip_left_min,ip_left_max,ip_right_min,ip_right_max,
                                    ipv4_left_offset,ipv4_right_offset,ipv6_left_offset,ipv6_right_offset,
                                    fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max);
 
-  // printf("DEBUG: measure() mspars address is: %p\n",&mspars);
-  // printf("DEBUG: measure() mspars.cp value is: %p\n",mspars.cp);
-
-  // printf("DEBUG: measure() case 1 msend() will be started...\n");
           // start left sender
-          if ( rte_eal_remote_launch(msend, &mspars, cpu_left_sender) )
+          if ( rte_eal_remote_launch(msend, &mspars2, cpu_left_sender) )
             std::cout << "Error: could not start Left Sender." << std::endl;
         }
   
         // set parameters for the right receiver
-        rReceiverParameters rrpars2(finish_receiving,rightport,"Forward",state_table_size,&valid_entries,&stateTable);
+        rrpars2=rReceiverParameters(finish_receiving,rightport,"Forward",state_table_size,&valid_entries,&stateTable);
   
         // start right receiver
         if ( rte_eal_remote_launch(rreceive, &rrpars2, cpu_right_receiver) )
@@ -3887,20 +3881,20 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
                    &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
 
         // then, initialize the parameter class instance
-        rSenderParameters rspars(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                                ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                                rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
-				state_table_size,stateTable,responder_tuples);
+        rspars=rSenderParameters(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                                 rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
+				 state_table_size,stateTable,responder_tuples);
 
         // start right sender
         if (rte_eal_remote_launch(rsend, &rspars, cpu_right_sender) )
           std::cout << "Error: could not start Right Sender." << std::endl;
 
         // set parameters for the left receiver
-        receiverParameters rpars(finish_receiving,leftport,"Reverse");
+        rpars2=receiverParameters(finish_receiving,leftport,"Reverse");
 
         // start left receiver
-        if ( rte_eal_remote_launch(receive, &rpars, cpu_left_receiver) )
+        if ( rte_eal_remote_launch(receive, &rpars2, cpu_left_receiver) )
           std::cout << "Error: could not start Left Receiver." << std::endl;
       }
 
@@ -3921,9 +3915,8 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       }
     case 2:	// stateful test: Initiator is on the right side, Responder is on the left side
       { 
-  // printf("DEBUG: measure() case 2 is running...\n");
       // set "common" parameters (currently not common with anyone, only code is reused; it will be common, when sending test frames)
-      senderCommonParameters scp1(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
+      scp1=senderCommonParameters(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
 
       // set "individual" parameters for the sender of the Initiator residing on the right side
 
@@ -3931,22 +3924,22 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       ipQuad ipq(ip_right_version,ip_left_version,&ipv4_right_real,&ipv4_left_real,&ipv4_right_virtual,&ipv4_left_virtual,
                  &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
 
-      if ( !( ip_varies || enumerate_ips ) ) { // use traditional single source and destination IP addresses
+      if ( !ip_varies ) { // use traditional single source and destination IP addresses
   
         // initialize the parameter class instance for preliminary phase
-        iSenderParameters ispars1(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                                  ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                                  rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
-  			          enumerate_ports,pre_frames,uniquePortComb);
+        ispars=iSenderParameters(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                                 rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
+  			         enumerate_ports,pre_frames,uniquePortComb);
   
         // start right sender
-        if ( rte_eal_remote_launch(isend, &ispars1, cpu_right_sender) )
+        if ( rte_eal_remote_launch(isend, &ispars, cpu_right_sender) )
           std::cout << "Error: could not Initiator's Sender." << std::endl;
   
       } else { // use multiple source and/or destination IP addresses (because ip_varies OR enumerate_ips)
 
         // initialize the parameter class instance for preliminary phase
-        imSenderParameters imspars(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+        imspars=imSenderParameters(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
                                    ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,
                                    ip_right_varies,ip_left_varies,ip_right_min,ip_right_max,ip_left_min,ip_left_max,
                                    ipv4_right_offset,ipv4_left_offset,ipv6_right_offset,ipv6_left_offset,
@@ -3959,7 +3952,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       }
 
       // set parameters for the left receiver
-      rReceiverParameters rrpars1(finish_receiving_pre,leftport,"Preliminary",state_table_size,&valid_entries,&stateTable); 
+      rrpars1=rReceiverParameters(finish_receiving_pre,leftport,"Preliminary",state_table_size,&valid_entries,&stateTable); 
 
       // start left receiver
       if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_left_receiver) )
@@ -3977,11 +3970,10 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       else
         std::cout << "Info: Preliminary phase finished." << std::endl;
 
-  // printf("DEBUG: measure() case 2 real test may follow...\n");
       // Now the real test may follow.
 
       // set "common" parameters
-      senderCommonParameters scp2(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc);
+      scp2=senderCommonParameters(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc);
 
       if ( reverse ) {  // Right to Left direction is active
 
@@ -3990,7 +3982,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
         // set "individual" parameters for the sender of the Initiator residing on the right side
     
           // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
-          senderParameters spars2(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+          spars2=senderParameters(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
                                   ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
                                   rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
     
@@ -4001,20 +3993,19 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
         } else { // use multiple source and/or destination IP addresses
 
           // initialize the parameter class instance
-          mSenderParameters mspars(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                                   ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,
-                                   ip_right_varies,ip_left_varies,ip_right_min,ip_right_max,ip_left_min,ip_left_max,
-                                   ipv4_right_offset,ipv4_left_offset,ipv6_right_offset,ipv6_left_offset,
-                                   rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
+          mspars2=mSenderParameters(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                    ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,
+                                    ip_right_varies,ip_left_varies,ip_right_min,ip_right_max,ip_left_min,ip_left_max,
+                                    ipv4_right_offset,ipv4_left_offset,ipv6_right_offset,ipv6_left_offset,
+                                    rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max);
 
-  // printf("DEBUG: measure() case 2 msend() will be started...\n");
           // start right sender
-          if (rte_eal_remote_launch(msend, &mspars, cpu_right_sender) )
+          if (rte_eal_remote_launch(msend, &mspars2, cpu_right_sender) )
             std::cout << "Error: could not start Right Sender." << std::endl;
         }
 
         // set parameters for the left receiver
-        rReceiverParameters rrpars2(finish_receiving,leftport,"Reverse",state_table_size,&valid_entries,&stateTable);
+        rrpars2=rReceiverParameters(finish_receiving,leftport,"Reverse",state_table_size,&valid_entries,&stateTable);
   
         // start left receiver
         if ( rte_eal_remote_launch(rreceive, &rrpars2, cpu_left_receiver) )
@@ -4029,20 +4020,20 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
                    &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
 
         // then, initialize the parameter class instance
-        rSenderParameters rspars(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                                ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-                                fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-                                state_table_size,stateTable,responder_tuples);
+        rspars=rSenderParameters(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                                 fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
+                                 state_table_size,stateTable,responder_tuples);
 
         // start left sender
         if (rte_eal_remote_launch(rsend, &rspars, cpu_left_sender) )
           std::cout << "Error: could not start Left Sender." << std::endl;
 
         // set parameters for the right receiver
-        receiverParameters rpars(finish_receiving,rightport,"Forward");
+        rpars2=receiverParameters(finish_receiving,rightport,"Forward");
 
         // start right receiver
-        if ( rte_eal_remote_launch(receive, &rpars, cpu_right_receiver) )
+        if ( rte_eal_remote_launch(receive, &rpars2, cpu_right_receiver) )
           std::cout << "Error: could not start Right Receiver." << std::endl;
       }
 
@@ -4064,6 +4055,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
   }
 }
 
+
 // sets the values of the data fields
 senderCommonParameters::senderCommonParameters(uint16_t ipv6_frame_size_, uint16_t ipv4_frame_size_, uint32_t frame_rate_, uint16_t duration_, 
                                                uint32_t n_, uint32_t m_, uint64_t hz_, uint64_t start_tsc_) {
@@ -4075,6 +4067,9 @@ senderCommonParameters::senderCommonParameters(uint16_t ipv6_frame_size_, uint16
   m = m_;
   hz = hz_;
   start_tsc = start_tsc_;
+}
+senderCommonParameters::senderCommonParameters()
+{
 }
 
 // sets the values of the data fields
@@ -4103,6 +4098,9 @@ senderParameters::senderParameters(class senderCommonParameters *cp_, int ip_ver
   sport_max = sport_max_;
   dport_min = dport_min_;
   dport_max = dport_max_;
+}
+senderParameters::senderParameters()
+{
 }
 
 // sets the values of the data fields
@@ -4144,6 +4142,9 @@ mSenderParameters::mSenderParameters(class senderCommonParameters *cp_, int ip_v
   sport_max = sport_max_;
   dport_min = dport_min_;
   dport_max = dport_max_;
+}
+mSenderParameters::mSenderParameters()
+{
 }
 
 // sets the values of the data fields
@@ -4193,6 +4194,9 @@ imSenderParameters::imSenderParameters(class senderCommonParameters *cp_, int ip
   uniqueIpComb = uniqueIpComb_;
   uniqueFtComb = uniqueFtComb_;
 }
+imSenderParameters::imSenderParameters()
+{
+}
 
 // sets the values of the data fields
 iSenderParameters::iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
@@ -4206,6 +4210,9 @@ iSenderParameters::iSenderParameters(class senderCommonParameters *cp_, int ip_v
   enumerate_ports = enumerate_ports_;
   pre_frames = pre_frames_;
   uniquePortComb = uniquePortComb_;
+}
+iSenderParameters::iSenderParameters()
+{
 }
 
 // sets the values of the data fields
@@ -4221,6 +4228,9 @@ rSenderParameters::rSenderParameters(class senderCommonParameters *cp_, int ip_v
   stateTable = stateTable_;
   responder_tuples = responder_tuples_;
 }
+rSenderParameters::rSenderParameters()
+{
+}
 
 // sets the values of the data fields
 receiverParameters::receiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_) {
@@ -4228,7 +4238,11 @@ receiverParameters::receiverParameters(uint64_t finish_receiving_, uint8_t eth_i
   eth_id = eth_id_;
   side = side_;
 }
+receiverParameters::receiverParameters()
+{
+}
 
+// sets the values of the data fields
 rReceiverParameters::rReceiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, unsigned state_table_size_,
                                          unsigned *valid_entries_, atomicFourTuple **stateTable_) :
   receiverParameters::receiverParameters(finish_receiving_,eth_id_,side_) {
@@ -4236,7 +4250,9 @@ rReceiverParameters::rReceiverParameters(uint64_t finish_receiving_, uint8_t eth
   valid_entries = valid_entries_;
   stateTable = stateTable_;
 }
-
+rReceiverParameters::rReceiverParameters()
+{
+}
 
 // collects the apppropriate IP addresses
 // for simplicity, both source and destionation address fields exist in both v4 and v6, but only the appropriate version IP addresses are set, 

@@ -295,6 +295,8 @@ class senderCommonParameters {
   uint64_t hz;                  // number of clock cycles per second
   uint64_t start_tsc;           // sending of the test frames will begin at this time
 //  uint64_t frames_to_send;      // number of frames to send
+
+  senderCommonParameters();
   senderCommonParameters(uint16_t ipv6_frame_size_, uint16_t ipv4_frame_size_, uint32_t frame_rate_, uint16_t duration_,
                          uint32_t n_, uint32_t m_, uint64_t hz_, uint64_t start_tsc_);
 };
@@ -315,6 +317,7 @@ class senderParameters {
   unsigned var_sport, var_dport;
   uint16_t sport_min, sport_max, dport_min, dport_max;
 
+  senderParameters();
   senderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
@@ -342,6 +345,7 @@ class mSenderParameters {
   unsigned var_sport, var_dport;
   uint16_t sport_min, sport_max, dport_min, dport_max;
 
+  mSenderParameters();
   mSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
@@ -359,6 +363,7 @@ class iSenderParameters : public senderParameters {
   uint32_t pre_frames;
   bits32 *uniquePortComb;   // array for pre-generated unique port number combinations (Enumerate:-ports 3)
 
+  iSenderParameters();
   iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
@@ -392,6 +397,7 @@ class imSenderParameters {
   bits32 *uniqueIpComb;   // array for pre-generated unique IP address (part) combinations (Enumerate-ips 3, but Enumerate-ports 0)
   bits64 *uniqueFtComb;   // array for pre-generated unique 4-tuple (part) combinations (Enumerate-ips 3, Enumerate-ports 3)
 
+  imSenderParameters();
   imSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
@@ -411,6 +417,7 @@ class rSenderParameters : public senderParameters {
   atomicFourTuple *stateTable; 	// the 4-tuples are only read
   unsigned responder_tuples;     // how to select a 4-tuple for test frame generation
 
+  rSenderParameters();
   rSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
@@ -425,6 +432,8 @@ class receiverParameters {
   uint64_t finish_receiving;     // this one is common, but it was not worth dealing with it.
   uint8_t eth_id;
   const char *side;
+
+  receiverParameters();
   receiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_);
 };
 
@@ -434,6 +443,8 @@ class rReceiverParameters : public receiverParameters {
   unsigned state_table_size;	// the number of possible entries in the state table
   unsigned *valid_entries;	// the number of valid entries in the state table (carries vale from prelim. to real test)
   atomicFourTuple **stateTable;	// allocate and set pointer, if preliminary test; exists with valid entries otherwise
+
+  rReceiverParameters();
   rReceiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_,unsigned state_table_size_,
                       unsigned *valid_entries_, atomicFourTuple **stateTable_);
 };
