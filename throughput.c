@@ -1214,6 +1214,8 @@ int send(void *par) {
   uint64_t sent_frames=0; // counts the number of sent frames
   double elapsed_seconds; // for checking the elapsed seconds during sending
 
+  bool fg_frame, ipv4_frame; // when sending IPv4 traffic, background frames are IPv6: their UDP checksum may be 0.
+
   if ( !varport ) {
     // optimized code for using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4
     if ( num_dest_nets == 1 ) { 	
@@ -1285,9 +1287,6 @@ int send(void *par) {
     } // end of optimized code for multiple destination networks
   } // end of optimized code for fixed port numbers
   else {
-
-  printf("%s: old sender is running, varport is on.\n", side, sent_frames);
-
     // implementation of varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
     // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
     if ( num_dest_nets == 1 ) {
@@ -1350,7 +1349,7 @@ int send(void *par) {
       i=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start;
           udp_sport = (uint16_t *)fg_udp_sport[i];
@@ -1365,6 +1364,8 @@ int send(void *par) {
           udp_chksum = (uint16_t *)bg_udp_chksum[i];
           pkt_mbuf = bg_pkt_mbuf[i];
         }
+        ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+
         // from here, we need to handle the frame identified by the temprary variables
         if ( var_sport ) {
           // sport is varying
@@ -1399,8 +1400,9 @@ int send(void *par) {
           chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                  	// make one's complement
-        if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+        if ( ipv4_frame && chksum == 0 )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -1490,7 +1492,7 @@ int send(void *par) {
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         int index = uni_dis_net(gen_net); // index of the pre-generated Test Frame for the given destination network
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start[index];
           udp_sport = (uint16_t *)fg_udp_sport[index][j];
@@ -1505,6 +1507,8 @@ int send(void *par) {
           udp_chksum = (uint16_t *)bg_udp_chksum[index][j];
           pkt_mbuf = bg_pkt_mbuf[index][j];
         }
+        ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+
         // from here, we need to handle the frame identified by the temprary variables
         if ( var_sport ) {
           // sport is varying
@@ -1539,8 +1543,9 @@ int send(void *par) {
           chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                    // make one's complement
-        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+        if ( ipv4_frame && chksum == 0 )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -1617,13 +1622,11 @@ int msend(void *par) {
   uint64_t sent_frames=0; // counts the number of sent frames
   double elapsed_seconds; // for checking the elapsed seconds during sending
 
-  int foreground_frame; // when sending IPv4 traffic, bacground frames are IPv6: they have no IPv4 checksum
+  bool fg_frame, ipv4_frame; // when sending IPv4 traffic, bacground frames are IPv6: they have no IPv4 checksum
 
   if ( !varport ) {
     // Implementation of multiple IP addresses (own idea) only, 
     // optimized code for using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4
-
-    // printf("%s: msend() is running, varport is off.\n", side);
 
     // N size array is used to resolve the write after send problem. In its elements, the
     // varying 16-bit fields of the source and/or destination IP addresses and for IPv4, header checksum are updated.
@@ -1694,9 +1697,8 @@ int msend(void *par) {
     i=0; // increase maunally after each sending
     for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
       // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-      if ( sent_frames % n  < m ) {
+      if ( fg_frame = sent_frames % n < m ) {
         // foreground frame is to be sent
-        foreground_frame = 1;
         v4_chksum = fg_ipv4_chksum_start; // rubbish, if IPv6, but a branch instruction is spared
         ip_src = (uint16_t *)fg_src_ip[i];
         ip_dst = (uint16_t *)fg_dst_ip[i];
@@ -1706,16 +1708,16 @@ int msend(void *par) {
         pkt_mbuf = fg_pkt_mbuf[i];
       } else {
         // background frame is to be sent, it is surely IPv6
-        foreground_frame = 0;
         ip_src = (uint16_t *)bg_src_ip[i];
         ip_dst = (uint16_t *)bg_dst_ip[i];
         chksum = bg_udp_chksum_start;
         udp_chksum = (uint16_t *)bg_udp_chksum[i];
         pkt_mbuf = bg_pkt_mbuf[i];
       }
+      ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
       ip_chksum=0; // first, changes are accumulated here, surely used for UDP checksum and if IPv4 then also for IPV4 checksum
-      // from here, we need to handle the fields identified by the temprary variables
 
+      // from here, we need to handle the fields identified by the temprary variables
       if ( var_sip ) {
         // source IP is varying
         switch ( var_sip ) {
@@ -1748,19 +1750,19 @@ int msend(void *par) {
         }
         ip_chksum += *ip_dst = htons(dip);     // set dst IP 16-bit field and add to checksum
       }
-      if ( ip_version == 4 && foreground_frame ) {
+      if ( ipv4_frame ) {
         // only the IPv4 header contains IP checksum
         v4_chksum += ip_chksum;
         v4_chksum = ((v4_chksum & 0xffff0000) >> 16) + (v4_chksum & 0xffff);   	// calculate 16-bit one's complement sum
+        v4_chksum = ((v4_chksum & 0xffff0000) >> 16) + (v4_chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         v4_chksum = (~v4_chksum) & 0xffff;                                  	// make one's complement
-        if (v4_chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
-          v4_chksum = 0xffff;
         *ipv4_chksum = (uint16_t) v4_chksum;            // set checksum in the frame
       }
       chksum += ip_chksum;  // UDP checksum contains the checksum of IPv4 or IPv6 pseudo header
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+      chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
       chksum = (~chksum) & 0xffff;                                  	// make one's complement
-      if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+      if ( ipv4_frame && chksum == 0)  // over IPv4, checksum should not be 0 (0 means, no checksum is used)
         chksum = 0xffff;
       *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
       // finally, when its time is here, send the frame
@@ -1768,13 +1770,8 @@ int msend(void *par) {
       while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) ); 		// send out the frame
       i = (i+1) % N;
     } // this is the end of the sending cycle
-
-
   } // end of optimized code for fixed port numbers
   else {
-
-    // printf("%s: msend() is running, varport is on.\n", side);
-
     // Implementation of multiple IP addresses (own idea) plus
     // varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
     // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
@@ -1868,9 +1865,8 @@ int msend(void *par) {
     i=0; // increase maunally after each sending
     for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
       // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-      if ( sent_frames % n  < m ) {
+      if ( fg_frame = sent_frames % n < m ) {
         // foreground frame is to be sent
-        foreground_frame = 1;
         v4_chksum = fg_ipv4_chksum_start; // rubbish, if IPv6, but a branch instruction is spared
         ip_src = (uint16_t *)fg_src_ip[i];
         ip_dst = (uint16_t *)fg_dst_ip[i];
@@ -1882,7 +1878,6 @@ int msend(void *par) {
         pkt_mbuf = fg_pkt_mbuf[i];
       } else {
         // background frame is to be sent, it is surely IPv6
-        foreground_frame = 0;
         ip_src = (uint16_t *)bg_src_ip[i];
         ip_dst = (uint16_t *)bg_dst_ip[i];
         chksum = bg_udp_chksum_start;
@@ -1891,9 +1886,10 @@ int msend(void *par) {
         udp_chksum = (uint16_t *)bg_udp_chksum[i];
         pkt_mbuf = bg_pkt_mbuf[i];
       }
-      ip_chksum=0; // first, changes are accumulated here, surely used for UDP checksum and if IPv4 then also for IPV4 checksum
-      // from here, we need to handle the fields identified by the temprary variables
+      ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+      ip_chksum=0; // first, changes are accumulated here, surely used for UDP checksum and if IPv4 then also for IPv4 checksum
 
+      // from here, we need to handle the fields identified by the temprary variables
       if ( var_sip ) {
         // source IP is varying
         switch ( var_sip ) {
@@ -1926,13 +1922,12 @@ int msend(void *par) {
         }
         ip_chksum += *ip_dst = htons(dip);     // set dst IP 16-bit field and add to checksum
       }
-      if ( ip_version == 4 && foreground_frame ) {
+      if ( ipv4_frame ) {
         // only the IPv4 header contains IP checksum
         v4_chksum += ip_chksum;
         v4_chksum = ((v4_chksum & 0xffff0000) >> 16) + (v4_chksum & 0xffff);   	// calculate 16-bit one's complement sum
+        v4_chksum = ((v4_chksum & 0xffff0000) >> 16) + (v4_chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         v4_chksum = (~v4_chksum) & 0xffff;                                  	// make one's complement
-        if (v4_chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
-          v4_chksum = 0xffff;
         *ipv4_chksum = (uint16_t) v4_chksum;            // set checksum in the frame
       }
       chksum += ip_chksum;  // UDP checksum contains the checksum of IPv4 or IPv6 pseudo header
@@ -1969,8 +1964,9 @@ int msend(void *par) {
         chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
       }
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+      chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
       chksum = (~chksum) & 0xffff;                                  	// make one's complement
-      if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+      if ( ipv4_frame && chksum == 0)  // over IPv4, checksum should not be 0 (0 means, no checksum is used)
         chksum = 0xffff;
       *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
       // finally, when its time is here, send the frame
@@ -2030,8 +2026,8 @@ int isend(void *par) {
 
   unsigned enumerate_ports = p->enumerate_ports;
 
-  bool fg_frame;		// the current frame belongs to the foreground traffic: needed for port number enumerataion
-
+  bool fg_frame, ipv4_frame;    // the current frame belongs to the foreground traffic: needed for port number enumerataion, 
+                                // and when sending IPv4 traffic, background frames are IPv6: their UDP checksum may be 0.
   // further local variables
   uint64_t frames_to_send;
   uint64_t sent_frames=0; 	// counts the number of sent frames
@@ -2193,14 +2189,13 @@ int isend(void *par) {
       i=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start;
           udp_sport = (uint16_t *)fg_udp_sport[i];
           udp_dport = (uint16_t *)fg_udp_dport[i];
           udp_chksum = (uint16_t *)fg_udp_chksum[i];
           pkt_mbuf = fg_pkt_mbuf[i];
-	  fg_frame = 1;  	// used only, when port enumeration is done, but always set to aviod a branch instruction
         } else {
           // background frame is to be sent
           chksum = bg_udp_chksum_start;
@@ -2208,8 +2203,9 @@ int isend(void *par) {
           udp_dport = (uint16_t *)bg_udp_dport[i];
           udp_chksum = (uint16_t *)bg_udp_chksum[i];
           pkt_mbuf = bg_pkt_mbuf[i];
-	  fg_frame = 0;  	// used only, when port enumeration is done, but always set to aviod a branch instruction
         }
+        ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+
         // from here, we need to handle the frame identified by the temprary variables
         if ( enumerate_ports && fg_frame ) {
 	  switch ( enumerate_ports ) {
@@ -2279,8 +2275,9 @@ int isend(void *par) {
           }
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                  	// make one's complement
-        if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+        if ( ipv4_frame && chksum == 0 )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -2370,7 +2367,7 @@ int isend(void *par) {
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         int index = uni_dis_net(gen_net); // index of the pre-generated Test Frame for the given destination network
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start[index];
           udp_sport = (uint16_t *)fg_udp_sport[index][j];
@@ -2385,6 +2382,8 @@ int isend(void *par) {
           udp_chksum = (uint16_t *)bg_udp_chksum[index][j];
           pkt_mbuf = bg_pkt_mbuf[index][j];
         }
+        ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+
         // from here, we need to handle the frame identified by the temprary variables
         if ( var_sport ) {
           // sport is varying
@@ -2419,8 +2418,9 @@ int isend(void *par) {
           chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                    // make one's complement
-        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+        if ( ipv4_frame && chksum == 0)        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -2508,20 +2508,16 @@ int imsend(void *par) {
   bits32 *uniqueIC=uniqueIpComb;      // working pointer to the current element of uniqueIpComb
   bits64 *uniqueFC=uniqueFtComb;      // working pointer to the current element of uniqueFtComb
 
-  int foreground_frame; // when sending IPv4 traffic, bacground frames are IPv6: they have no IPv4 checksum
-                        // also needed for IP address and port number enumeration (it is only for foreground frames)
+  bool fg_frame, ipv4_frame;    // When sending IPv4 traffic, bacground frames are IPv6: they have no header checksum, 
+               	                // and they treat UDP checksum differently (0 is an allowed value).
+                                // Also needed for IP address and port number enumeration (it is only for foreground frames).
 
   unsigned var_ip = var_sip || var_dip || enumerate_ips; // derived logical value: at least one IP address has to be changed?
   unsigned varport = var_sport || var_dport || enumerate_ports; // derived logical value: at least one port has to be changed?
 
-  //  printf("%s: imsend() debug: enumerate_ips=%i\n", side, enumerate_ips);
-
-
   if ( !varport ) {
     // Implementation of multiple IP addresses (own idea) only, 
     // optimized code for using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4
-
-    // printf("%s: imsend() is running, varport is off.\n", side);
 
     // N size array is used to resolve the write after send problem. In its elements, the
     // varying 16-bit fields of the source and/or destination IP addresses and for IPv4, header checksum are updated.
@@ -2610,9 +2606,8 @@ int imsend(void *par) {
     i=0; // increase maunally after each sending
     for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
       // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-      if ( sent_frames % n  < m ) {
+      if ( fg_frame = sent_frames % n  < m ) {
         // foreground frame is to be sent
-        foreground_frame = 1;
         v4_chksum = fg_ipv4_chksum_start; // rubbish, if IPv6, but a branch instruction is spared
         ip_src = (uint16_t *)fg_src_ip[i];
         ip_dst = (uint16_t *)fg_dst_ip[i];
@@ -2622,17 +2617,17 @@ int imsend(void *par) {
         pkt_mbuf = fg_pkt_mbuf[i];
       } else {
         // background frame is to be sent, it is surely IPv6
-        foreground_frame = 0;
         ip_src = (uint16_t *)bg_src_ip[i];
         ip_dst = (uint16_t *)bg_dst_ip[i];
         chksum = bg_udp_chksum_start;
         udp_chksum = (uint16_t *)bg_udp_chksum[i];
         pkt_mbuf = bg_pkt_mbuf[i];
       }
+      ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
       ip_chksum=0; // first, changes are accumulated here, surely used for UDP checksum and if IPv4 then also for IPv4 checksum
       // from here, we need to handle the fields identified by the temprary variables
 
-      if ( enumerate_ips && foreground_frame ) {
+      if ( enumerate_ips && fg_frame ) {
         switch ( enumerate_ips ) {
           case 1: // IP addresses are enumerated in increasing order
             // sip is the low order counter, dip is the high order counter
@@ -2698,37 +2693,30 @@ int imsend(void *par) {
           }
           ip_chksum += *ip_dst = htons(dip);     // set dst IP 16-bit field and add to checksum
         }
-      } // end of the else of "if ( enumerate_ips && foreground_frame )" 
+      } // end of the else of "if ( enumerate_ips && fg_frame )" 
 
-      if ( ip_version == 4 && foreground_frame ) {
+      if ( ipv4_frame ) {
         // only the IPv4 header contains IP checksum
         v4_chksum += ip_chksum;
         v4_chksum = ((v4_chksum & 0xffff0000) >> 16) + (v4_chksum & 0xffff);   	// calculate 16-bit one's complement sum
+        v4_chksum = ((v4_chksum & 0xffff0000) >> 16) + (v4_chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         v4_chksum = (~v4_chksum) & 0xffff;                                  	// make one's complement
-        if (v4_chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
-          v4_chksum = 0xffff;
-        *ipv4_chksum = (uint16_t) v4_chksum;            // set checksum in the frame
+        *ipv4_chksum = (uint16_t) v4_chksum;    // set checksum in the frame
       }
       chksum += ip_chksum;  // UDP checksum contains the checksum of IPv4 or IPv6 pseudo header
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+      chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
       chksum = (~chksum) & 0xffff;                                  	// make one's complement
-      if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+      if ( ipv4_frame && chksum == 0 )          // over IPv4, checksum should not be 0 (0 means, no checksum is used)
         chksum = 0xffff;
-      *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+      *udp_chksum = (uint16_t) chksum;          // set checksum in the frame
       // finally, when its time is here, send the frame
       while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
       while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) ); 		// send out the frame
       i = (i+1) % N;
     } // this is the end of the sending cycle
-
-
   } // end of optimized code for fixed port numbers
   else {
-
-    // printf("%s: imsend() is running, varport is on.\n", side);
-    // printf("%s: imsend() enumerate_ips: %i.\n", side, enumerate_ips);
-    // printf("%s: imsend() enumerate_ports: %i.\n", side, enumerate_ports);
-
     // Implementation of multiple IP addresses (own idea) plus
     // varying port numbers recommended by RFC 4814 https://tools.ietf.org/html/rfc4814#section-4.5
     // RFC 4814 requires pseudorandom port numbers, increasing and decreasing ones are our additional, non-stantard solutions
@@ -2845,9 +2833,8 @@ int imsend(void *par) {
     i=0; // increase maunally after each sending
     for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
       // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-      if ( sent_frames % n  < m ) {
+      if ( fg_frame = sent_frames % n  < m ) {
         // foreground frame is to be sent
-        foreground_frame = 1;
         v4_chksum = fg_ipv4_chksum_start; // rubbish, if IPv6, but a branch instruction is spared
         ip_src = (uint16_t *)fg_src_ip[i];
         ip_dst = (uint16_t *)fg_dst_ip[i];
@@ -2859,7 +2846,6 @@ int imsend(void *par) {
         pkt_mbuf = fg_pkt_mbuf[i];
       } else {
         // background frame is to be sent, it is surely IPv6
-        foreground_frame = 0;
         ip_src = (uint16_t *)bg_src_ip[i];
         ip_dst = (uint16_t *)bg_dst_ip[i];
         chksum = bg_udp_chksum_start;
@@ -2868,15 +2854,13 @@ int imsend(void *par) {
         udp_chksum = (uint16_t *)bg_udp_chksum[i];
         pkt_mbuf = bg_pkt_mbuf[i];
       }
+      ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
       ip_chksum=0; // first, changes are accumulated here, surely used for UDP checksum and if IPv4 then also for IPV4 checksum
       // from here, we need to handle the fields identified by the temprary variables
 
-      if ( enumerate_ips && foreground_frame ) { // Note: enumerate_ips == enumerate_ports is guaranteed here.
+      if ( enumerate_ips && fg_frame ) { // Note: enumerate_ips == enumerate_ports is guaranteed here.
         switch ( enumerate_ips ) {
           case 1: // IP addresses and port numbers are enumerated in increasing order
-
-    // printf("%s: imsend() IP address and port number enumeration in increasing order.\n", side);
-
             // order of fields from most significant one to least significant one: dip, sip, dp, sp
             if ( (sp=e_sport++) == sport_max ) {
               e_sport = sport_min;
@@ -2892,9 +2876,6 @@ int imsend(void *par) {
                 sip = e_sip, dip = e_dip;
             } else
               dp = e_dport, sip = e_sip, dip = e_dip;
-
-    // printf("%s: imsend() dip: %i, sip: %i, dp: %i, sp: %i.\n", side, dip, sip, dp, sp);
-
             break;
           case 2:
             // order of fields from most significant one to least significant one: dip, sip, dp, sp
@@ -2914,24 +2895,17 @@ int imsend(void *par) {
               dp = e_dport, sip = e_sip, dip = e_dip;
             break;
           case 3: // the next unique pseudorandom IP address and port number combination is taken
-
-    //  printf("%s: imsend() IP address and port number enumeration in pseudorandom order.\n", side);
-
             sip = uniqueFC->ft.sip;	// read source IP address
             dip = uniqueFC->ft.dip;	// read destination IP address
             sp = uniqueFC->ft.sport;	// read source port number
             dp = uniqueFC->ft.dport; 	// read destination port number
             uniqueFC++;               	// increase pointer: no check needed, we have surely enough
-
-    //  printf("%s: imsend() dip: %i, sip: %i, dp: %i, sp: %i.\n", side, dip, sip, dp, sp);
-
             break;
         } // end of switch
         ip_chksum += *ip_src = htons(sip);  // set src IP 16-bit field and add to checksum
         ip_chksum += *ip_dst = htons(dip);  // set dst IP 16-bit field and add to checksum
         chksum += *udp_sport = htons(sp);   // set source port and add to checksum 
         chksum += *udp_dport = htons(dp);   // set destination port and add to checksum 
-
       } else {
         // IP addresses and port numbers are handled as before (there is no enumeration)
         if ( var_sip ) {
@@ -2998,21 +2972,21 @@ int imsend(void *par) {
           }
           chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
-      } // end of the else of "if ( enumerate_ips && foreground_frame )"
+      } // end of the else of "if ( enumerate_ips && fg_frame )"
 
-      if ( ip_version == 4 && foreground_frame ) {
+      if ( ipv4_frame ) {
         // only the IPv4 header contains IP checksum
         v4_chksum += ip_chksum;
         v4_chksum = ((v4_chksum & 0xffff0000) >> 16) + (v4_chksum & 0xffff);   	// calculate 16-bit one's complement sum
+        v4_chksum = ((v4_chksum & 0xffff0000) >> 16) + (v4_chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         v4_chksum = (~v4_chksum) & 0xffff;                                  	// make one's complement
-        if (v4_chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
-          v4_chksum = 0xffff;
         *ipv4_chksum = (uint16_t) v4_chksum;            // set checksum in the frame
       }
       chksum += ip_chksum;  // UDP checksum contains the checksum of IPv4 or IPv6 pseudo header
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
+      chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
       chksum = (~chksum) & 0xffff;                                  	// make one's complement
-      if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
+      if ( ipv4_frame && chksum == 0)          // over IPv4, checksum should not be 0 (0 means, no checksum is used)
         chksum = 0xffff;
       *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
       // finally, when its time is here, send the frame
@@ -3086,7 +3060,7 @@ int rsend(void *par) {
 
   unsigned index;   	// current state table index for reading a 4-tuple (used when 'responder-ports' is 1 or 2)
   fourTuple ft;		// 4-tuple is read from the state table into this 
-  bool fg_frame;   	// the current frame belongs to the foreground traffic: will be handled in a stateful way (if it is IPv4)
+  bool fg_frame, ipv4_frame; // the current frame belongs to the foreground traffic: will be handled in a stateful way (if it is IPv4)
 
   if ( !responder_tuples ) {
     // optimized code for using a single 4-tuple taken from the very first preliminary frame (as foreground traffic)
@@ -3239,7 +3213,7 @@ int rsend(void *par) {
       i=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start;
           udp_sport = (uint16_t *)fg_udp_sport[i];
@@ -3250,7 +3224,6 @@ int rsend(void *par) {
 	  ipv4_src = (uint32_t *)fg_ipv4_src[i];	// this is rubbish if IP version is 6
 	  ipv4_dst = (uint32_t *)fg_ipv4_dst[i];	// this is rubbish if IP version is 6 
           pkt_mbuf = fg_pkt_mbuf[i];
-	  fg_frame = 1;
         } else {
           // background frame is to be sent
           chksum = bg_udp_chksum_start;
@@ -3258,10 +3231,11 @@ int rsend(void *par) {
           udp_dport = (uint16_t *)bg_udp_dport[i];
           udp_chksum = (uint16_t *)bg_udp_chksum[i];
           pkt_mbuf = bg_pkt_mbuf[i];
-	  fg_frame = 0;
         }
+        ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+
         // from here, we need to handle the frame identified by the temprary variables
-        if ( ip_version == 4 && fg_frame ) {
+        if ( ipv4_frame ) {
 	  // this frame is handled in a stateful way
 	  switch ( responder_tuples ) { 			// here, it is surely not 0
 	    case 1:
@@ -3287,12 +3261,13 @@ int rsend(void *par) {
 	  *udp_dport = ft.init_port;
 	  // calculate checksum....
 	  chksum += rte_raw_cksum(&ft,12);				
-	  chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);	// reduce to 32 bits
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
 	  chksum = (~chksum) & 0xffff;                                  // make one's complement
-	  if (chksum == 0)                                              // checksum should not be 0 (0 means, no checksum is used)
+	  if (chksum == 0)                      // this is an IPv4 frame, checksum should not be 0 (0 means, no checksum is used)
 	    chksum = 0xffff;
-	  *udp_chksum = (uint16_t) chksum;            	// set checksum in the frame
-	  *ipv4_chksum = 0;        			// IPv4 header checksum is set to 0
+	  *udp_chksum = (uint16_t) chksum;      // set checksum in the frame
+	  *ipv4_chksum = 0;        		// IPv4 header checksum is set to 0 
 	  *ipv4_chksum = rte_ipv4_cksum(ipv4_hdr_start);        // IPv4 header checksum is set now
 	  // this is the end of handling the frame in a stateful way
 	} else {
@@ -3329,10 +3304,10 @@ int rsend(void *par) {
             }
             chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
           }
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                  	// make one's complement
-          if (chksum == 0)                                              	// checksum should not be 0 (0 means, no checksum is used)
-            chksum = 0xffff;
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);  	// calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+          chksum = (~chksum) & 0xffff;                                  // make one's complement
+          // Note: this is the else of "if ( ipv4_frame )", thus this is an IPv6 frame, its checksum may be 0.
           *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
   	  // this is the end of handling the frame in the old way
 	}
@@ -3426,7 +3401,7 @@ int rsend(void *par) {
       j=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start;
           udp_sport = (uint16_t *)fg_udp_sport[j];
@@ -3437,7 +3412,6 @@ int rsend(void *par) {
           ipv4_src = (uint32_t *)fg_ipv4_src[j];        // this is rubbish if IP version is 6
           ipv4_dst = (uint32_t *)fg_ipv4_dst[j];        // this is rubbish if IP version is 6
           pkt_mbuf = fg_pkt_mbuf[j];
-          fg_frame = 1;
         } else {
           // background frame is to be sent
           int net_index = uni_dis_net(gen_net); // index of the pre-generated Test Frame for the given destination network
@@ -3446,10 +3420,11 @@ int rsend(void *par) {
           udp_dport = (uint16_t *)bg_udp_dport[net_index][j];
           udp_chksum = (uint16_t *)bg_udp_chksum[net_index][j];
           pkt_mbuf = bg_pkt_mbuf[net_index][j];
-          fg_frame = 0;
         }
+        ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+
         // from here, we need to handle the frame identified by the temprary variables
-        if ( ip_version == 4 && fg_frame ) {
+        if ( ipv4_frame ) {
           // this frame is handled in a stateful way
           switch ( responder_tuples ) {                  // here, it is surely not 0
             case 1:
@@ -3475,11 +3450,12 @@ int rsend(void *par) {
           *udp_dport = ft.init_port;
           // calculate checksum....
           chksum += rte_raw_cksum(&ft,12);
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // reduce to 32 bits
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
           chksum = (~chksum) & 0xffff;                                  // make one's complement
-          if (chksum == 0)                                              // checksum should not be 0 (0 means, no checksum is used)
+          if (chksum == 0)                      // this is an IPv4 frame, checksum should not be 0 (0 means, no checksum is used)
             chksum = 0xffff;
-          *udp_chksum = (uint16_t) chksum;              // set checksum in the frame
+          *udp_chksum = (uint16_t) chksum;      // set checksum in the frame
           *ipv4_chksum = 0;                             // IPv4 header checksum is set to 0
           *ipv4_chksum = rte_ipv4_cksum(ipv4_hdr_start);        // IPv4 header checksum is set now
           // this is the end of handling the frame in a stateful way
@@ -3517,10 +3493,10 @@ int rsend(void *par) {
             }
             chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
           }
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                    // make one's complement
-          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-            chksum = 0xffff;
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+          chksum = (~chksum) & 0xffff;                                  // make one's complement
+          // Note: this is the else of "if ( ipv4_frame )", thus this is an IPv6 frame, its checksum may be 0.
           *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
           // this is the end of handling the frame in the old way
 	}
