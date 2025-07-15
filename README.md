@@ -398,7 +398,7 @@ The list of supported NICs is available from: https://core.dpdk.org/supported/
 
 As for time measurements, siitperf relies on the rte_rdtsc() DPDK function, which executes the RDTSC instuction of Intel CPUs. RDTSC is also implemented by several AMD CPUs. To produce reliable results, the CPU needs to support constant TSC. (In Intel terminology, the CPU needs to have the "constant_tsc" flag.)
 
-Closing with latest commit 165cb7f on September 6, 2033, we used it under Debian 9.9 -- 9.13, and our DPDK version was: 16.11.9-1+deb9u1 -- 16.11.11-1+deb9u2.
+Closing with latest commit 165cb7f on September 6, 2023, we used it under Debian 9.9 -- 9.13, and our DPDK version was: 16.11.9-1+deb9u1 -- 16.11.11-1+deb9u2.
 Since July 15, 2025, it works under Debian 12.11 with DPDK 22.11.8-1~deb12u1.
 
 Siitperf uses a separate core for sending and receiving in each directions, thus it requires 4 CPU cores for bidirectional traffic besides the main core used for executing the main program. The 4 cores should be reserved at boot time to avoid interference with other programs. We used the following line in "/etc/default/grub":
