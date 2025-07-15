@@ -1,1 +1,0 @@
-/usr/share/dpdk/dpdk-sdk-env.sh
