@@ -424,15 +424,15 @@ G. Lencse, "Adding RFC 4814 Random Port Feature to Siitperf: Design, Implementat
 
 The testing of the accuracy of siitperf is documented in the following (open access) paper:
 
-G. Lencse, "Checking the Accuracy of Siitperf", *Infocommunications Journal*, vol. 13, no. 2, pp. 2-9, June 2021, DOI: 10.36244/ICJ.2021.2.1, available https://doi.org/10.36244/ICJ.2021.2.1
+G. Lencse, "Checking the Accuracy of Siitperf", _Infocommunications Journal_, vol. 13, no. 2, pp. 2-9, June 2021, DOI: 10.36244/ICJ.2021.2.1, available https://doi.org/10.36244/ICJ.2021.2.1
 
 And its extension to support stateful NAT64/NAT44 measurements is documented in the following (open access) paper:
 
-G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateful NATxy Gateways: Theory and Practice of Extending Siitperf for Stateful Tests", Computer Communications, vol. 172, no. 1, pp. 75-88, August 1, 2022, DOI: 10.1016/j.comcom.2022.05.028, available: https://doi.org/10.1016/j.comcom.2022.05.028
+G. Lencse, "Design and Implementation of a Software Tester for Benchmarking Stateful NATxy Gateways: Theory and Practice of Extending Siitperf for Stateful Tests", _Computer Communications_, vol. 172, no. 1, pp. 75-88, August 1, 2022, DOI: 10.1016/j.comcom.2022.05.028, available: https://doi.org/10.1016/j.comcom.2022.05.028
 
-Regarding the methodology for benchmarking stateful NAT64/NAT44 gateways, please see our Internet Draft:
+Regarding the methodology for benchmarking stateful NAT64/NAT44 gateways, please see RFC 9693:
 
-G. Lencse, K. Shima, "Benchmarking Methodology for Stateful NATxy Gateways using RFC 4814 Pseudorandom Port Numbers", Internet Draft, IETF BMWG, https://datatracker.ietf.org/doc/html/draft-ietf-bmwg-benchmarking-stateful
+G. Lencse, K. Shima, "Benchmarking Methodology for Stateful NATxy Gateways", IETF RFC 9693, DOI: 10.17487/RFC9693, https://doi.org/10.17487/RFC9693
 
 The above methodology has been validated by performing benchmarking measurements with three radically different stateful NAT64 implementations (Jool, tayga+iptables, OpenBSD PF). Our experiments were documented (including configuration scripts) in the following (open access) paper:
 
