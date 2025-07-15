@@ -1,7 +1,7 @@
 siitperf
 ========
 
-Siitperf is an RFC 8219 and RFC 4814 compliant SIIT and stateful NAT64/NAT44 tester written in C++ using DPDK, and it can be used under the Linux operating system. Originally it was only a SIIT tester (hence its name) and it worked with DPDK 16.11.9 (included in Debian 9). Then it was extended to support stateful NAT64 and stateful NAT44 (also called NAPT) tests, too. Later, it was enabled to use pseudorandom IP addresses, which is currently implemented in siitperf-tp (see below) only. Finally, it was updated to work with DPDK 22.11.8 (included in Debian 12).
+Siitperf is an RFC 8219, RFC 4814, and RFC 9693 compliant SIIT and stateful NAT64/NAT44 tester written in C++ using DPDK, and it can be used under the Linux operating system. Originally it was only a SIIT tester (hence its name) and it worked with DPDK 16.11.9 (included in Debian 9). Then it was extended to support stateful NAT64 and stateful NAT44 (also called NAPT) tests, too. Later, it was enabled to use pseudorandom IP addresses, which is currently implemented in siitperf-tp (see below) only. Finally, it was updated to work with DPDK 22.11.8 (included in Debian 12).
 
 Introduction
 ------------
@@ -149,7 +149,7 @@ __pdv.sh__: Performs PDV  measurements using siitperf-pdv.
 
 __binary-rate-alg.sh-pdv__:  Implements a binary search for special throughput measurements using siitperf-pdv.
 
-Warning: the scripts were written for personal use of the author of siitperf at the NICT StarBED environment. They are included to be rather samples than ready to use scripts for other users. They should be read and understood before use.
+Warning: the scripts were written for personal use of the author of siitperf. They are included to be rather samples than ready to use scripts for other users. They should be read and understood before use.
 
 ## Operation: Stateful Tests
 
