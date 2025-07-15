@@ -1,12 +1,13 @@
 /* Siitperf was originally an RFC 8219 SIIT (stateless NAT64) tester
- * written in C++ using DPDK in 2019.
+ * written in C++ using DPDK 16.11.9 (included in Debian 9) in 2019.
  * RFC 4814 variable port number feature was added in 2020.
  * Extension for stateful tests was done in 2021.
  * Now it supports benchmarking of stateful NAT64 and stateful NAT44
  * gateways, but stateful NAT66 and stateful NAT46 are out of scope.
  * Extension for multiple IP addresses was done in 2023.
+ * Updated for DPDK 22.11.8 (included in Debian 12) in 2025.
  *
- *  Copyright (C) 2019-2023 Gabor Lencse
+ *  Copyright (C) 2019-2025 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -223,14 +224,14 @@ struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char
 struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                                    const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                                    const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport);
-void mkEthHeader(struct ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type);
-void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, const uint32_t *dst_ip);
-void mkUdpHeader(struct udp_hdr *udp, uint16_t length, unsigned var_sport, unsigned var_dport); 
+void mkEthHeader(struct rte_ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type);
+void mkIpv4Header(struct rte_ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, const uint32_t *dst_ip);
+void mkUdpHeader(struct rte_udp_hdr *udp, uint16_t length, unsigned var_sport, unsigned var_dport); 
 void mkData(uint8_t *data, uint16_t length);
 struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                                 const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                                 const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport);
-void mkIpv6Header(struct ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip);
+void mkIpv6Header(struct rte_ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip);
 
 // report the current TSC of the exeucting core
 int report_tsc(void *par);
@@ -307,7 +308,7 @@ class senderParameters {
   class senderCommonParameters *cp;
   int ip_version;
   rte_mempool *pkt_pool;
-  uint8_t eth_id;
+  uint16_t eth_id;
   const char *side;
   struct ether_addr *dst_mac, *src_mac;
   uint32_t *src_ipv4, *dst_ipv4;
@@ -318,7 +319,7 @@ class senderParameters {
   uint16_t sport_min, sport_max, dport_min, dport_max;
 
   senderParameters();
-  senderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  senderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -332,7 +333,7 @@ class mSenderParameters {
   class senderCommonParameters *cp;
   int ip_version;
   rte_mempool *pkt_pool;
-  uint8_t eth_id;
+  uint16_t eth_id;
   const char *side;
   struct ether_addr *dst_mac, *src_mac;
   uint32_t *src_ipv4, *dst_ipv4;
@@ -346,7 +347,7 @@ class mSenderParameters {
   uint16_t sport_min, sport_max, dport_min, dport_max;
 
   mSenderParameters();
-  mSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  mSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    unsigned var_sip_, unsigned var_dip_,
@@ -361,10 +362,10 @@ class iSenderParameters : public senderParameters {
   public:
   unsigned enumerate_ports;
   uint32_t pre_frames;
-  bits32 *uniquePortComb;   // array for pre-generated unique port number combinations (Enumerate:-ports 3)
+  bits32 *uniquePortComb;   // array for pre-generated unique port number combinations (Enumerate-ports: 3)
 
   iSenderParameters();
-  iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -379,7 +380,7 @@ class imSenderParameters {
   class senderCommonParameters *cp;
   int ip_version;
   rte_mempool *pkt_pool;
-  uint8_t eth_id;
+  uint16_t eth_id;
   const char *side;
   struct ether_addr *dst_mac, *src_mac;
   uint32_t *src_ipv4, *dst_ipv4;
@@ -398,7 +399,7 @@ class imSenderParameters {
   bits64 *uniqueFtComb;   // array for pre-generated unique 4-tuple (part) combinations (Enumerate-ips 3, Enumerate-ports 3)
 
   imSenderParameters();
-  imSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  imSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    unsigned var_sip_, unsigned var_dip_,
@@ -418,7 +419,7 @@ class rSenderParameters : public senderParameters {
   unsigned responder_tuples;     // how to select a 4-tuple for test frame generation
 
   rSenderParameters();
-  rSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  rSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -430,11 +431,11 @@ class rSenderParameters : public senderParameters {
 class receiverParameters {
   public:
   uint64_t finish_receiving;     // this one is common, but it was not worth dealing with it.
-  uint8_t eth_id;
+  uint16_t eth_id;
   const char *side;
 
   receiverParameters();
-  receiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_);
+  receiverParameters(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_);
 };
 
 // to store parameters for Responder's receiver
@@ -445,7 +446,7 @@ class rReceiverParameters : public receiverParameters {
   atomicFourTuple **stateTable;	// allocate and set pointer, if preliminary test; exists with valid entries otherwise
 
   rReceiverParameters();
-  rReceiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_,unsigned state_table_size_,
+  rReceiverParameters(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_,unsigned state_table_size_,
                       unsigned *valid_entries_, atomicFourTuple **stateTable_);
 };
 

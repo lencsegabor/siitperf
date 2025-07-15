@@ -1,10 +1,10 @@
 #!/bin/bash
 #Parameters
-impl="p110-10G-p110-selftest44-Sf1-Ep3-Rp3-40000x10000-tp" # name of the tested implementation (used for logging)
+impl="selftester-10G-selftest44-Sf1-Ep3-40000x100-tp" # name of the tested implementation (used for logging)
 max=8000000 # maximum packet rate
-N=400000000 # number of preliminary frames
-M=400000000 # state table size
-R=7000000 # frame rate for preliminary phase
+N=4000000 # number of preliminary frames
+M=4000000 # state table size
+R=8000000 # frame rate for preliminary phase
 T=500 # global timeout for preliminary phase
 D=$((1000*N/R+2*T)) # delay caused by the preliminary phase
 DUT_IP=172.16.28.95
@@ -17,7 +17,7 @@ to=2000 # timeout in milliseconds
 n=2 # foreground traffic, if ( frame_counter % n < m ) 
 m=2 # E.g. n=m=2 is all foreground traffic; n=2,m=0 is all background traffic; n=10,m=9 is 90% fg and 10% bg
 sleept=10 # sleeping time between the experiments
-e=1 # measurement error: the difference betwen the values of the higher and the lower bound of the binary search, when finishing
+e=1000 # measurement error: the difference betwen the values of the higher and the lower bound of the binary search, when finishing
 no_exp=20 # number of experiments
 res_dir="results" # base directory for the results (they will be copied there at the end)
 
@@ -86,6 +86,11 @@ do
 			echo "Error occurred, testing must stop."
 			exit -1;
 		fi
+		invalid=$(grep 'invalid' temp.out)
+		if [ -n "$invalid" ]; then
+			echo The test is INVALID due to exceeding the allowed sending time.
+			echo The test is INVALID due to exceeding the allowed sending time. >> ratetest.log
+		fi
                 # Collect and evaluate the results (depending on the direction of the test)
                 if [ "$dir" == "b" ]; then
                         fwd_rec=$(grep 'Forward frames received:' temp.out | awk '{print $4}')
@@ -94,7 +99,7 @@ do
                         echo Forward: $fwd_rec frames were received from the required $((xpts*r)) frames >> ratetest.log
                         echo Reverse: $rev_rec frames were received from the required $((xpts*r)) frames
                         echo Reverse: $rev_rec frames were received from the required $((xpts*r)) frames >> ratetest.log
-                        if [ $fwd_rec -eq $((xpts*r)) ] && [ $rev_rec -eq $((xpts*r)) ]; then
+                        if [ $fwd_rec -eq $((xpts*r)) ] && [ $rev_rec -eq $((xpts*r)) ] && [ -z "$invalid" ]; then
                                 l=$r
                                 echo TEST PASSED
                                 echo TEST PASSED >> ratetest.log
@@ -109,7 +114,7 @@ do
                         fwd_rec=$(grep 'Forward frames received:' temp.out | awk '{print $4}')
                         echo Forward: $fwd_rec frames were received from the required $((xpts*r)) frames
                         echo Forward: $fwd_rec frames were received from the required $((xpts*r)) frames >> ratetest.log
-                        if [ $fwd_rec -eq $((xpts*r)) ]; then
+                        if [ $fwd_rec -eq $((xpts*r)) ] && [ -z "$invalid" ]; then
                                 l=$r
                                 echo TEST PASSED
                                 echo TEST PASSED >> ratetest.log
@@ -124,7 +129,7 @@ do
                         rev_rec=$(grep 'Reverse frames received:' temp.out | awk '{print $4}')
                         echo Reverse: $rev_rec frames were received from the required $((xpts*r)) frames
                         echo Reverse: $rev_rec frames were received from the required $((xpts*r)) frames >> ratetest.log
-                        if [ $rev_rec -eq $((xpts*r)) ]; then
+                        if [ $rev_rec -eq $((xpts*r)) ] && [ -z "$invalid" ]; then
                                 l=$r
                                 echo TEST PASSED
                                 echo TEST PASSED >> ratetest.log

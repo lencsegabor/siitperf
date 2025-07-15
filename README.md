@@ -1,7 +1,7 @@
 siitperf
 ========
 
-Siitperf is an RFC 8219 and RFC 4814 compliant SIIT and stateful NAT64/NAT44 tester written in C++ using DPDK, and it can be used under the Linux operating system. Originally it was only a SIIT tester (hence its name) and then it was extended to support stateful NAT64 and stateful NAT44 (also called NAPT) tests, too. Finally, it was enabled to use pseudorandom IP addresses, which is currently implemented in siitperf-tp (see below) only.
+Siitperf is an RFC 8219 and RFC 4814 compliant SIIT and stateful NAT64/NAT44 tester written in C++ using DPDK, and it can be used under the Linux operating system. Originally it was only a SIIT tester (hence its name) and it worked with DPDK 16.11.9 (included in Debian 9). Then it was extended to support stateful NAT64 and stateful NAT44 (also called NAPT) tests, too. Later, it was enabled to use pseudorandom IP addresses, which is currently implemented in siitperf-tp (see below) only. Finally, it was updated to work with DPDK 22.11.8 (included in Debian 12).
 
 Introduction
 ------------
@@ -398,7 +398,8 @@ The list of supported NICs is available from: https://core.dpdk.org/supported/
 
 As for time measurements, siitperf relies on the rte_rdtsc() DPDK function, which executes the RDTSC instuction of Intel CPUs. RDTSC is also implemented by several AMD CPUs. To produce reliable results, the CPU needs to support constant TSC. (In Intel terminology, the CPU needs to have the "constant_tsc" flag.)
 
-Although siitperf is likely to run on most Linux distributions, we have tested it under Debian 9.9 -- 9.13, and our DPDK version was: 16.11.9-1+deb9u1 -- 16.11.11-1+deb9u2.
+Closing with latest commit 165cb7f on September 6, 2033, we used it under Debian 9.9 -- 9.13, and our DPDK version was: 16.11.9-1+deb9u1 -- 16.11.11-1+deb9u2.
+Since July 15, 2025, it works under Debian 12.11 with DPDK 22.11.8-1~deb12u1.
 
 Siitperf uses a separate core for sending and receiving in each directions, thus it requires 4 CPU cores for bidirectional traffic besides the main core used for executing the main program. The 4 cores should be reserved at boot time to avoid interference with other programs. We used the following line in "/etc/default/grub":
 
@@ -435,9 +436,11 @@ G. Lencse, K. Shima, "Benchmarking Methodology for Stateful NATxy Gateways using
 
 The above methodology has been validated by performing benchmarking measurements with three radically different stateful NAT64 implementations (Jool, tayga+iptables, OpenBSD PF). Our experiments were documented (including configuration scripts) in the following (open access) paper:
 
-G. Lencse, K. Shima, K. Cho, "Benchmarking methodology for stateful NAT64 gateways", *Computer Communications*, DOI: 10.1016/j.comcom.2023.08.009, available: https://doi.org/10.1016/j.comcom.2023.08.009
+G. Lencse, K. Shima, K. Cho, "Benchmarking methodology for stateful NAT64 gateways", _Computer Communications_, vol. 210, October 2023, pp. 256-272, DOI: 10.1016/j.comcom.2023.08.009, available: https://doi.org/10.1016/j.comcom.2023.08.009
 
-The paper about the extension of siitperf to use pseudorandom IP addresses has not been published yet. Its review version can be requested from the author by e-mail.
+Its extension to support pseudorandom IP addresses both it stateless and stateful tests has been documented in the following (open access) paper:
+
+G. Lencse, "Making Stateless and Stateful Network Performance Measurements Unbiased", _Computer Communications_, vol. 225, September 2024, pp. 141-155 DOI: 10.1016/j.comcom.2024.05.018, available: https://doi.org/10.1016/j.comcom.2024.05.018
 
 Any feedbacks (including questions, feature requests, comments, suggestions, etc.) are welcomed by the author.
 

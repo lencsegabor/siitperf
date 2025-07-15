@@ -1,11 +1,12 @@
 /* Siitperf was originally an RFC 8219 SIIT (stateless NAT64) tester
- * written in C++ using DPDK in 2019.
+ * written in C++ using DPDK 16.11.9 (included in Debian 9) in 2019.
  * RFC 4814 variable port number feature was added in 2020.
  * Extension for stateful tests was done in 2021.
  * Now it supports benchmarking of stateful NAT64 and stateful NAT44
  * gateways, but stateful NAT66 and stateful NAT46 are out of scope.
+ * Updated for DPDK 22.11.8 (included in Debian 12) in 2025.
  *
- *  Copyright (C) 2019-2021 Gabor Lencse
+ *  Copyright (C) 2019-2025 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -65,7 +66,7 @@ public:
 class senderParametersLatency : public senderParameters {
 public:
   uint64_t *send_ts;
-  senderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  senderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                           struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                           struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    	  uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -76,7 +77,7 @@ class iSenderParametersLatency : public iSenderParameters {
 public:
   uint64_t *send_ts;
 
-  iSenderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  iSenderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -88,7 +89,7 @@ class rSenderParametersLatency : public rSenderParameters {
 public:
   uint64_t *send_ts;
 
-  rSenderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  rSenderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -101,7 +102,7 @@ public:
   uint16_t num_timestamps;
   uint64_t *receive_ts;	// pointer to receive timestamps 
 
-  receiverParametersLatency(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, uint16_t num_timestamps_, uint64_t *receive_ts_);
+  receiverParametersLatency(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, uint16_t num_timestamps_, uint64_t *receive_ts_);
 };
 
 class rReceiverParametersLatency : public rReceiverParameters {
@@ -109,7 +110,7 @@ public:
   uint16_t num_timestamps;
   uint64_t *receive_ts; // pointer to receive timestamps
 
-  rReceiverParametersLatency(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, unsigned state_table_size_,
+  rReceiverParametersLatency(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, unsigned state_table_size_,
                              unsigned *valid_entries_, atomicFourTuple **stateTable_, uint16_t num_timestamps_, uint64_t *receive_ts_);
 };
 

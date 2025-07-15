@@ -1,12 +1,13 @@
 /* Siitperf was originally an RFC 8219 SIIT (stateless NAT64) tester 
- * written in C++ using DPDK in 2019.
+ * written in C++ using DPDK 16.11.9 (included in Debian 9) in 2019.
  * RFC 4814 variable port number feature was added in 2020.
  * Extension for stateful tests was done in 2021.
  * Now it supports benchmarking of stateful NAT64 and stateful NAT44 
  * gateways, but stateful NAT66 and stateful NAT46 are out of scope.
  * Extension for multiple IP addresses was done in 2023.
+ * Updated for DPDK 22.11.8 (included in Debian 12) in 2025.
  * 
- *  Copyright (C) 2019-2023 Gabor Lencse
+ *  Copyright (C) 2019-2025 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -697,8 +698,8 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
 
   // prepare for configuring the Ethernet ports
   memset(&cfg_port, 0, sizeof(cfg_port)); 	// e.g. no CRC generation offloading, etc. (May be improved later!)
-  cfg_port.txmode.mq_mode = ETH_MQ_TX_NONE;	// no multi queues 
-  cfg_port.rxmode.mq_mode = ETH_MQ_RX_NONE;	// no multi queues 
+  cfg_port.txmode.mq_mode = RTE_ETH_MQ_TX_NONE;	// no multi queues 
+  cfg_port.rxmode.mq_mode = RTE_ETH_MQ_RX_NONE;	// no multi queues 
 
   if ( rte_eth_dev_configure(leftport, 1, 1, &cfg_port) < 0 ) {
     std::cerr << "Error: Cannot configure network port #" << leftport << " provided as Left Port, Tester exits." << std::endl;
@@ -791,7 +792,7 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
       return -1;
     }
   rte_eth_link_get(leftport, &link_info);
-  } while ( link_info.link_status == ETH_LINK_DOWN );
+  } while ( link_info.link_status == RTE_ETH_LINK_DOWN );
   trials=0;
   do {
     if ( trials++ == MAX_PORT_TRIALS ) {
@@ -799,7 +800,7 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
       return -1;
     }
   rte_eth_link_get(rightport, &link_info);
-  } while ( link_info.link_status == ETH_LINK_DOWN );
+  } while ( link_info.link_status == RTE_ETH_LINK_DOWN );
 
   // Some sanity checks: NUMA node of the cores and of the NICs are matching or not...
   if ( numa_available() == -1 )
@@ -1048,20 +1049,20 @@ struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Test Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the IPv4 Test Frame! \n", side);
-  length -=  ETHER_CRC_LEN; // exclude CRC from the frame length
+  length -=  RTE_ETHER_CRC_LEN; // exclude CRC from the frame length
   pkt_mbuf->pkt_len = pkt_mbuf->data_len = length; // set the length in both places
   uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); // Access the Test Frame in the message buffer
-  ether_hdr *eth_hdr = reinterpret_cast<struct ether_hdr *>(pkt); // Ethernet header
-  ipv4_hdr *ip_hdr = reinterpret_cast<ipv4_hdr *>(pkt+sizeof(ether_hdr)); // IPv4 header
-  udp_hdr *udp_hd = reinterpret_cast<udp_hdr *>(pkt+sizeof(ether_hdr)+sizeof(ipv4_hdr)); // UDP header
-  uint8_t *udp_data = reinterpret_cast<uint8_t*>(pkt+sizeof(ether_hdr)+sizeof(ipv4_hdr)+sizeof(udp_hdr)); // UDP data
+  rte_ether_hdr *eth_hdr = reinterpret_cast<struct rte_ether_hdr *>(pkt); // Ethernet header
+  rte_ipv4_hdr *ip_hdr = reinterpret_cast<rte_ipv4_hdr *>(pkt+sizeof(rte_ether_hdr)); // IPv4 header
+  rte_udp_hdr *udp_hd = reinterpret_cast<rte_udp_hdr *>(pkt+sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)); // UDP header
+  uint8_t *udp_data = reinterpret_cast<uint8_t*>(pkt+sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr)); // UDP data
 
   mkEthHeader(eth_hdr, dst_mac, src_mac, 0x0800); 	// contains an IPv4 packet
-  int ip_length = length - sizeof(ether_hdr);
+  int ip_length = length - sizeof(rte_ether_hdr);
   mkIpv4Header(ip_hdr, ip_length, src_ip, dst_ip); 	// Does not set IPv4 header checksum
-  int udp_length = ip_length - sizeof(ipv4_hdr); 	// No IP Options are used
+  int udp_length = ip_length - sizeof(rte_ipv4_hdr); 	// No IP Options are used
   mkUdpHeader(udp_hd, udp_length, sport, dport);			
-  int data_legth = udp_length - sizeof(udp_hdr);
+  int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkData(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
   ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);	// IPv4 header checksum is set now
@@ -1081,14 +1082,14 @@ struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char
 
 
 // creates an Ethernet header
-void mkEthHeader(struct ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type) {
-  rte_memcpy(&eth->d_addr, dst_mac, sizeof(struct ether_hdr));
-  rte_memcpy(&eth->s_addr, src_mac, sizeof(struct ether_hdr));
+void mkEthHeader(struct rte_ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type) {
+  rte_memcpy(&eth->dst_addr, dst_mac, sizeof(struct rte_ether_hdr));
+  rte_memcpy(&eth->src_addr, src_mac, sizeof(struct rte_ether_hdr));
   eth->ether_type = htons(ether_type);
 }
 
 // creates an IPv4 header
-void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, const uint32_t *dst_ip) {
+void mkIpv4Header(struct rte_ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, const uint32_t *dst_ip) {
   ip->version_ihl=0x45; // Version: 4, IHL: 20/4=5
   ip->type_of_service=0; 
   ip->total_length = htons(length);
@@ -1103,7 +1104,7 @@ void mkIpv4Header(struct ipv4_hdr *ip, uint16_t length, const uint32_t *src_ip, 
 }
 
 // creates an UDP header
-void mkUdpHeader(struct udp_hdr *udp, uint16_t length, unsigned sport, unsigned dport) {
+void mkUdpHeader(struct rte_udp_hdr *udp, uint16_t length, unsigned sport, unsigned dport) {
   udp->src_port =  htons(sport);
   udp->dst_port =  htons(dport);
   udp->dgram_len = htons(length);
@@ -1130,20 +1131,20 @@ struct rte_mbuf *mkFinalTestFrame6(uint16_t length, rte_mempool *pkt_pool, const
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Test Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the IPv6 Test Frame! \n", side);
-  length -=  ETHER_CRC_LEN; // exclude CRC from the frame length
+  length -=  RTE_ETHER_CRC_LEN; // exclude CRC from the frame length
   pkt_mbuf->pkt_len = pkt_mbuf->data_len = length; // set the length in both places
   uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); // Access the Test Frame in the message buffer
-  ether_hdr *eth_hdr = reinterpret_cast<struct ether_hdr *>(pkt); // Ethernet header
-  ipv6_hdr *ip_hdr = reinterpret_cast<ipv6_hdr *>(pkt+sizeof(ether_hdr)); // IPv6 header
-  udp_hdr *udp_hd = reinterpret_cast<udp_hdr *>(pkt+sizeof(ether_hdr)+sizeof(ipv6_hdr)); // UDP header
-  uint8_t *udp_data = reinterpret_cast<uint8_t*>(pkt+sizeof(ether_hdr)+sizeof(ipv6_hdr)+sizeof(udp_hdr)); // UDP data
+  rte_ether_hdr *eth_hdr = reinterpret_cast<struct rte_ether_hdr *>(pkt); // Ethernet header
+  rte_ipv6_hdr *ip_hdr = reinterpret_cast<rte_ipv6_hdr *>(pkt+sizeof(rte_ether_hdr)); // IPv6 header
+  rte_udp_hdr *udp_hd = reinterpret_cast<rte_udp_hdr *>(pkt+sizeof(rte_ether_hdr)+sizeof(rte_ipv6_hdr)); // UDP header
+  uint8_t *udp_data = reinterpret_cast<uint8_t*>(pkt+sizeof(rte_ether_hdr)+sizeof(rte_ipv6_hdr)+sizeof(rte_udp_hdr)); // UDP data
 
   mkEthHeader(eth_hdr, dst_mac, src_mac, 0x86DD); // contains an IPv6 packet
-  int ip_length = length - sizeof(ether_hdr);
+  int ip_length = length - sizeof(rte_ether_hdr);
   mkIpv6Header(ip_hdr, ip_length, src_ip, dst_ip); 
-  int udp_length = ip_length - sizeof(ipv6_hdr); // No IP Options are used
+  int udp_length = ip_length - sizeof(rte_ipv6_hdr); // No IP Options are used
   mkUdpHeader(udp_hd, udp_length, sport, dport);
-  int data_legth = udp_length - sizeof(udp_hdr);
+  int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkData(udp_data, data_legth);
   udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
   return pkt_mbuf;
@@ -1162,9 +1163,9 @@ struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char
 
 
 // creates an IPv6 header
-void mkIpv6Header(struct ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip) {
+void mkIpv6Header(struct rte_ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip) {
   ip->vtc_flow = htonl(0x60000000); // Version: 6, Traffic class: 0, Flow label: 0
-  ip->payload_len = htons(length-sizeof(ipv6_hdr)); 
+  ip->payload_len = htons(length-sizeof(rte_ipv6_hdr)); 
   ip->proto = 0x11; // UDP
   ip->hop_limits = 0x0A; 
   rte_mov16((uint8_t *)&ip->src_addr,(uint8_t *)src_ip);
@@ -1190,7 +1191,7 @@ int send(void *par) {
   // parameters which are different for the Left sender and the Right sender
   int ip_version = p->ip_version;
   rte_mempool *pkt_pool = p->pkt_pool;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   struct ether_addr *dst_mac = p->dst_mac;
   struct ether_addr *src_mac = p->src_mac;
@@ -1559,8 +1560,9 @@ int send(void *par) {
   elapsed_seconds = (double)(rte_rdtsc()-start_tsc)/hz;
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
   if ( elapsed_seconds > duration*TOLERANCE )
-    rte_exit(EXIT_FAILURE, "%s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
-  printf("%s frames sent: %lu\n", side, sent_frames);
+    printf("Warning: %s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
+  else
+    printf("%s frames sent: %lu\n", side, sent_frames);
 
   return 0;
 }
@@ -1586,7 +1588,7 @@ int msend(void *par) {
   // parameters which are different for the Left sender and the Right sender
   int ip_version = p->ip_version;
   rte_mempool *pkt_pool = p->pkt_pool;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   struct ether_addr *dst_mac = p->dst_mac;
   struct ether_addr *src_mac = p->src_mac;
@@ -1980,8 +1982,9 @@ int msend(void *par) {
   elapsed_seconds = (double)(rte_rdtsc()-start_tsc)/hz;
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
   if ( elapsed_seconds > duration*TOLERANCE )
-    rte_exit(EXIT_FAILURE, "%s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
-  printf("%s frames sent: %lu\n", side, sent_frames);
+    printf("Warning: %s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
+  else
+    printf("%s frames sent: %lu\n", side, sent_frames);
 
   return 0;
 }
@@ -2005,7 +2008,7 @@ int isend(void *par) {
   // parameters which are different for the Left sender and the Right sender
   int ip_version = p->ip_version;
   rte_mempool *pkt_pool = p->pkt_pool;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   struct ether_addr *dst_mac = p->dst_mac;
   struct ether_addr *src_mac = p->src_mac;
@@ -2436,10 +2439,10 @@ int isend(void *par) {
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, (double)elapsed_tsc/hz);
   // this is a preliminary test, 'duration' is not valid
   if ( elapsed_tsc > hz*frames_to_send/frame_rate*TOLERANCE )
-    rte_exit(EXIT_FAILURE, "%s sending was too slow (only %3.10lf percent of required rate), the test is invalid.\n", side,
+    printf("Warning: %s sending was too slow (only %3.10lf percent of required rate), the test is invalid.\n", side,
              100.0*frames_to_send/elapsed_tsc*hz/frame_rate);
-
-  printf("%s frames sent: %lu\n", side, sent_frames);
+  else
+    printf("%s frames sent: %lu\n", side, sent_frames);
 
   if ( uniquePortComb ) 
     rte_free(uniquePortComb);	// free the array for pre-generated unique port number combinations
@@ -2467,7 +2470,7 @@ int imsend(void *par) {
   // parameters which are different for the Left sender and the Right sender
   int ip_version = p->ip_version;
   rte_mempool *pkt_pool = p->pkt_pool;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   struct ether_addr *dst_mac = p->dst_mac;
   struct ether_addr *src_mac = p->src_mac;
@@ -3001,9 +3004,11 @@ int imsend(void *par) {
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, (double)elapsed_tsc/hz);
   // this is a preliminary test, 'duration' is not valid
   if ( elapsed_tsc > hz*frames_to_send/frame_rate*TOLERANCE )
-    rte_exit(EXIT_FAILURE, "%s sending was too slow (only %3.10lf percent of required rate), the test is invalid.\n", side,
+    printf("Warning: %s sending was too slow (only %3.10lf percent of required rate), the test is invalid.\n", side,
              100.0*frames_to_send/elapsed_tsc*hz/frame_rate);
-  printf("%s frames sent: %lu\n", side, sent_frames);
+  else
+    printf("%s frames sent: %lu\n", side, sent_frames);
+
   if ( uniqueIpComb )
     rte_free(uniqueIpComb);   // free the array for pre-generated unique IP address combinations
   if ( uniqueFtComb )
@@ -3030,7 +3035,7 @@ int rsend(void *par) {
   // parameters which are different for the Left sender and the Right sender
   int ip_version = p->ip_version;
   rte_mempool *pkt_pool = p->pkt_pool;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   struct ether_addr *dst_mac = p->dst_mac;
   struct ether_addr *src_mac = p->src_mac;
@@ -3151,8 +3156,8 @@ int rsend(void *par) {
       struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N], *pkt_mbuf; // pointers of message buffers for fg. and bg. Test Frames
       uint8_t *pkt; // working pointer to the current frame (in the message buffer)
       uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N], *bg_udp_sport[N], *bg_udp_dport[N], *bg_udp_chksum[N]; // pointers to the given fields
-      uint8_t *fg_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests
-      ipv4_hdr *ipv4_hdr_start; // used for IPv4 header checksum calculation
+      uint8_t *fg_rte_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests
+      rte_ipv4_hdr *rte_ipv4_hdr_start; // used for IPv4 header checksum calculation
       uint16_t *udp_sport, *udp_dport, *udp_chksum, *ipv4_chksum; // working pointers to the given fields
       uint32_t *ipv4_src, *ipv4_dst; // further ones for stateful tests
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start;  // starting values (uncomplemented checksums taken from the original frames)
@@ -3166,7 +3171,7 @@ int rsend(void *par) {
 	  // All IPv4 addresses and port numbers are set to 0.
           fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
-	  fg_ipv4_hdr[i] = pkt + 14;
+	  fg_rte_ipv4_hdr[i] = pkt + 14;
           fg_ipv4_chksum[i] = pkt + 24;
           fg_ipv4_src[i] = pkt + 26;
           fg_ipv4_dst[i] = pkt + 30;
@@ -3219,7 +3224,7 @@ int rsend(void *par) {
           udp_sport = (uint16_t *)fg_udp_sport[i];
           udp_dport = (uint16_t *)fg_udp_dport[i];
           udp_chksum = (uint16_t *)fg_udp_chksum[i];
-	  ipv4_hdr_start = (ipv4_hdr *)fg_ipv4_hdr[i];
+	  rte_ipv4_hdr_start = (rte_ipv4_hdr *)fg_rte_ipv4_hdr[i];
 	  ipv4_chksum = (uint16_t *) fg_ipv4_chksum[i];
 	  ipv4_src = (uint32_t *)fg_ipv4_src[i];	// this is rubbish if IP version is 6
 	  ipv4_dst = (uint32_t *)fg_ipv4_dst[i];	// this is rubbish if IP version is 6 
@@ -3268,7 +3273,7 @@ int rsend(void *par) {
 	    chksum = 0xffff;
 	  *udp_chksum = (uint16_t) chksum;      // set checksum in the frame
 	  *ipv4_chksum = 0;        		// IPv4 header checksum is set to 0 
-	  *ipv4_chksum = rte_ipv4_cksum(ipv4_hdr_start);        // IPv4 header checksum is set now
+	  *ipv4_chksum = rte_ipv4_cksum(rte_ipv4_hdr_start);        // IPv4 header checksum is set now
 	  // this is the end of handling the frame in a stateful way
 	} else {
 	  // this frame is handled in the old way
@@ -3329,8 +3334,8 @@ int rsend(void *par) {
       uint8_t *pkt; // working pointer to the current frame (in the message buffer)
       uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N]; // pointers to the given fields of the pre-prepared Test Frames
       uint8_t *bg_udp_sport[256][N], *bg_udp_dport[256][N], *bg_udp_chksum[256][N]; // pointers to the given fields of the pre-prepared Test Frames
-      uint8_t *fg_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests, but not per dest. networks!
-      ipv4_hdr *ipv4_hdr_start; // used for IPv4 header checksum calculation
+      uint8_t *fg_rte_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests, but not per dest. networks!
+      rte_ipv4_hdr *rte_ipv4_hdr_start; // used for IPv4 header checksum calculation
       uint16_t *udp_sport, *udp_dport, *udp_chksum, *ipv4_chksum; // working pointers to the given fields
       uint32_t *ipv4_src, *ipv4_dst; // further ones for stateful tests
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
@@ -3348,7 +3353,7 @@ int rsend(void *par) {
         if ( ip_version == 4 ) {
           fg_pkt_mbuf[j] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[j], uint8_t *); // Access the Test Frame in the message buffer
-          fg_ipv4_hdr[j] = pkt + 14;
+          fg_rte_ipv4_hdr[j] = pkt + 14;
           fg_ipv4_chksum[j] = pkt + 24;
           fg_ipv4_src[j] = pkt + 26;
           fg_ipv4_dst[j] = pkt + 30;
@@ -3407,7 +3412,7 @@ int rsend(void *par) {
           udp_sport = (uint16_t *)fg_udp_sport[j];
           udp_dport = (uint16_t *)fg_udp_dport[j];
           udp_chksum = (uint16_t *)fg_udp_chksum[j];
-          ipv4_hdr_start = (ipv4_hdr *)fg_ipv4_hdr[j];
+          rte_ipv4_hdr_start = (rte_ipv4_hdr *)fg_rte_ipv4_hdr[j];
           ipv4_chksum = (uint16_t *) fg_ipv4_chksum[j];
           ipv4_src = (uint32_t *)fg_ipv4_src[j];        // this is rubbish if IP version is 6
           ipv4_dst = (uint32_t *)fg_ipv4_dst[j];        // this is rubbish if IP version is 6
@@ -3457,7 +3462,7 @@ int rsend(void *par) {
             chksum = 0xffff;
           *udp_chksum = (uint16_t) chksum;      // set checksum in the frame
           *ipv4_chksum = 0;                             // IPv4 header checksum is set to 0
-          *ipv4_chksum = rte_ipv4_cksum(ipv4_hdr_start);        // IPv4 header checksum is set now
+          *ipv4_chksum = rte_ipv4_cksum(rte_ipv4_hdr_start);        // IPv4 header checksum is set now
           // this is the end of handling the frame in a stateful way
         } else {
           // this frame is handled in the old way
@@ -3513,8 +3518,9 @@ int rsend(void *par) {
   elapsed_seconds = (double)(rte_rdtsc()-start_tsc)/hz;
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
   if ( elapsed_seconds > duration*TOLERANCE )
-    rte_exit(EXIT_FAILURE, "%s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
-  printf("%s frames sent: %lu\n", side, sent_frames);
+    printf("Warning: %s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
+  else
+    printf("%s frames sent: %lu\n", side, sent_frames);
 
   return 0;
 }
@@ -3528,7 +3534,7 @@ int receive(void *par) {
   // collecting input parameters:
   class receiverParameters *p = (class receiverParameters *)par;
   uint64_t finish_receiving = p->finish_receiving;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
 
   // further local variables
@@ -3569,7 +3575,7 @@ int rreceive(void *par) {
   // collecting input parameters:
   class rReceiverParameters *p = (class rReceiverParameters *)par;
   uint64_t finish_receiving = p->finish_receiving;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   unsigned state_table_size = p->state_table_size;
   unsigned *valid_entries = p->valid_entries;
@@ -3803,7 +3809,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       rte_eal_wait_lcore(cpu_right_receiver);
 
       if ( valid_entries < state_table_size )
-        rte_exit(EXIT_FAILURE, "Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
+        printf("Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
       else
       	std::cout << "Info: Preliminary phase finished." << std::endl;
 
@@ -3942,7 +3948,7 @@ void Throughput::measure(uint16_t leftport, uint16_t rightport) {
       rte_eal_wait_lcore(cpu_left_receiver);
       
       if ( valid_entries < state_table_size )
-        rte_exit(EXIT_FAILURE, "Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
+        printf("Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
       else
         std::cout << "Info: Preliminary phase finished." << std::endl;
 
@@ -4049,7 +4055,7 @@ senderCommonParameters::senderCommonParameters()
 }
 
 // sets the values of the data fields
-senderParameters::senderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+senderParameters::senderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                                    uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -4080,7 +4086,7 @@ senderParameters::senderParameters()
 }
 
 // sets the values of the data fields
-mSenderParameters::mSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+mSenderParameters::mSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                                    unsigned var_sip_, unsigned var_dip_,
@@ -4124,7 +4130,7 @@ mSenderParameters::mSenderParameters()
 }
 
 // sets the values of the data fields
-imSenderParameters::imSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+imSenderParameters::imSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                                    unsigned var_sip_, unsigned var_dip_,
@@ -4175,7 +4181,7 @@ imSenderParameters::imSenderParameters()
 }
 
 // sets the values of the data fields
-iSenderParameters::iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+iSenderParameters::iSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                                      struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                                      struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                                      uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -4192,7 +4198,7 @@ iSenderParameters::iSenderParameters()
 }
 
 // sets the values of the data fields
-rSenderParameters::rSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+rSenderParameters::rSenderParameters(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                                      struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                                      struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                                      uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -4209,7 +4215,7 @@ rSenderParameters::rSenderParameters()
 }
 
 // sets the values of the data fields
-receiverParameters::receiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_) {
+receiverParameters::receiverParameters(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_) {
   finish_receiving=finish_receiving_;
   eth_id = eth_id_;
   side = side_;
@@ -4219,7 +4225,7 @@ receiverParameters::receiverParameters()
 }
 
 // sets the values of the data fields
-rReceiverParameters::rReceiverParameters(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, unsigned state_table_size_,
+rReceiverParameters::rReceiverParameters(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, unsigned state_table_size_,
                                          unsigned *valid_entries_, atomicFourTuple **stateTable_) :
   receiverParameters::receiverParameters(finish_receiving_,eth_id_,side_) {
   state_table_size = state_table_size_;
@@ -4324,6 +4330,7 @@ int randomPermutationGenerator32(void *par) {
   std::cerr << "Done. Lasted " << 1.0*(end_gen-start_gen)/hz << " seconds." << std::endl;
 
   *(p->addr_of_arraypointer) = array;	// set the pointer in the caller
+  return 0;
 }
 
 // prepares unique random port number combinations using random permutation
@@ -4423,5 +4430,6 @@ int randomPermutationGenerator64(void *par) {
   std::cerr << "Done. Lasted " << 1.0*(end_gen-start_gen)/hz << " seconds." << std::endl;
 
   *(p->addr_of_arraypointer) = array;	// set the pointer in the caller
+  return 0;
 }
 

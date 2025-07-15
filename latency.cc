@@ -1,11 +1,12 @@
 /* Siitperf was originally an RFC 8219 SIIT (stateless NAT64) tester
- * written in C++ using DPDK in 2019.
+ * written in C++ using DPDK 16.11.9 (included in Debian 9) in 2019.
  * RFC 4814 variable port number feature was added in 2020.
  * Extension for stateful tests was done in 2021.
  * Now it supports benchmarking of stateful NAT64 and stateful NAT44
  * gateways, but stateful NAT66 and stateful NAT46 are out of scope.
+ * Updated for DPDK 22.11.8 (included in Debian 12) in 2025.
  *
- *  Copyright (C) 2019-2021 Gabor Lencse
+ *  Copyright (C) 2019-2025 Gabor Lencse
  *
  *  This file is part of siitperf.
  *
@@ -74,20 +75,20 @@ struct rte_mbuf *mkFinalLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, co
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Latency Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the Latency Frame! \n", side);
-  length -=  ETHER_CRC_LEN; // exclude CRC from the frame length
+  length -=  RTE_ETHER_CRC_LEN; // exclude CRC from the frame length
   pkt_mbuf->pkt_len = pkt_mbuf->data_len = length; // set the length in both places
   uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); // Access the Test Frame in the message buffer
-  ether_hdr *eth_hdr = reinterpret_cast<struct ether_hdr *>(pkt); // Ethernet header
-  ipv4_hdr *ip_hdr = reinterpret_cast<ipv4_hdr *>(pkt+sizeof(ether_hdr)); // IPv4 header
-  udp_hdr *udp_hd = reinterpret_cast<udp_hdr *>(pkt+sizeof(ether_hdr)+sizeof(ipv4_hdr)); // UDP header
-  uint8_t *udp_data = reinterpret_cast<uint8_t*>(pkt+sizeof(ether_hdr)+sizeof(ipv4_hdr)+sizeof(udp_hdr)); // UDP data
+  rte_ether_hdr *eth_hdr = reinterpret_cast<struct rte_ether_hdr *>(pkt); // Ethernet header
+  rte_ipv4_hdr *ip_hdr = reinterpret_cast<rte_ipv4_hdr *>(pkt+sizeof(rte_ether_hdr)); // IPv4 header
+  rte_udp_hdr *udp_hd = reinterpret_cast<rte_udp_hdr *>(pkt+sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)); // UDP header
+  uint8_t *udp_data = reinterpret_cast<uint8_t*>(pkt+sizeof(rte_ether_hdr)+sizeof(rte_ipv4_hdr)+sizeof(rte_udp_hdr)); // UDP data
 
   mkEthHeader(eth_hdr, dst_mac, src_mac, 0x0800);       // contains an IPv4 packet
-  int ip_length = length - sizeof(ether_hdr);
+  int ip_length = length - sizeof(rte_ether_hdr);
   mkIpv4Header(ip_hdr, ip_length, src_ip, dst_ip);      // Does not set IPv4 header checksum
-  int udp_length = ip_length - sizeof(ipv4_hdr);        // No IP Options are used
+  int udp_length = ip_length - sizeof(rte_ipv4_hdr);        // No IP Options are used
   mkUdpHeader(udp_hd, udp_length, sport, dport);
-  int data_legth = udp_length - sizeof(udp_hdr);
+  int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkDataLatency(udp_data, data_legth, id);
   udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
   ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);
@@ -113,20 +114,20 @@ struct rte_mbuf *mkFinalLatencyFrame6(uint16_t length, rte_mempool *pkt_pool, co
   struct rte_mbuf *pkt_mbuf=rte_pktmbuf_alloc(pkt_pool); // message buffer for the Latency Frame
   if ( !pkt_mbuf )
     rte_exit(EXIT_FAILURE, "Error: %s sender can't allocate a new mbuf for the Latency Frame! \n", side);
-  length -=  ETHER_CRC_LEN; // exclude CRC from the frame length
+  length -=  RTE_ETHER_CRC_LEN; // exclude CRC from the frame length
   pkt_mbuf->pkt_len = pkt_mbuf->data_len = length; // set the length in both places
   uint8_t *pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); // Access the Test Frame in the message buffer
-  ether_hdr *eth_hdr = reinterpret_cast<struct ether_hdr *>(pkt); // Ethernet header
-  ipv6_hdr *ip_hdr = reinterpret_cast<ipv6_hdr *>(pkt+sizeof(ether_hdr)); // IPv6 header
-  udp_hdr *udp_hd = reinterpret_cast<udp_hdr *>(pkt+sizeof(ether_hdr)+sizeof(ipv6_hdr)); // UDP header
-  uint8_t *udp_data = reinterpret_cast<uint8_t*>(pkt+sizeof(ether_hdr)+sizeof(ipv6_hdr)+sizeof(udp_hdr)); // UDP data
+  rte_ether_hdr *eth_hdr = reinterpret_cast<struct rte_ether_hdr *>(pkt); // Ethernet header
+  rte_ipv6_hdr *ip_hdr = reinterpret_cast<rte_ipv6_hdr *>(pkt+sizeof(rte_ether_hdr)); // IPv6 header
+  rte_udp_hdr *udp_hd = reinterpret_cast<rte_udp_hdr *>(pkt+sizeof(rte_ether_hdr)+sizeof(rte_ipv6_hdr)); // UDP header
+  uint8_t *udp_data = reinterpret_cast<uint8_t*>(pkt+sizeof(rte_ether_hdr)+sizeof(rte_ipv6_hdr)+sizeof(rte_udp_hdr)); // UDP data
 
   mkEthHeader(eth_hdr, dst_mac, src_mac, 0x86DD); // contains an IPv6 packet
-  int ip_length = length - sizeof(ether_hdr);
+  int ip_length = length - sizeof(rte_ether_hdr);
   mkIpv6Header(ip_hdr, ip_length, src_ip, dst_ip);
-  int udp_length = ip_length - sizeof(ipv6_hdr); // No IP Options are used
+  int udp_length = ip_length - sizeof(rte_ipv6_hdr); // No IP Options are used
   mkUdpHeader(udp_hd, udp_length, sport, dport);
-  int data_legth = udp_length - sizeof(udp_hdr);
+  int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkDataLatency(udp_data, data_legth, id);
   udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
   return pkt_mbuf;
@@ -180,7 +181,7 @@ int sendLatency(void *par) {
   // parameters which are different for the Left sender and the Right sender
   int ip_version = p->ip_version;
   rte_mempool *pkt_pool = p->pkt_pool;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   struct ether_addr *dst_mac = p->dst_mac;
   struct ether_addr *src_mac = p->src_mac;
@@ -715,8 +716,9 @@ int sendLatency(void *par) {
   elapsed_seconds = (double)(rte_rdtsc()-start_tsc)/hz;
   printf("Info: %s sender's sending took %3.10lf seconds.\n", side, elapsed_seconds);
   if ( elapsed_seconds > duration*TOLERANCE )
-    rte_exit(EXIT_FAILURE, "%s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
-  printf("%s frames sent: %lu\n", side, sent_frames);
+    printf("Warning: %s sending exceeded the %3.10lf seconds limit, the test is invalid.\n", side, duration*TOLERANCE);
+  else
+    printf("%s frames sent: %lu\n", side, sent_frames);
   return 0;
 }
 
@@ -743,7 +745,7 @@ int rsendLatency(void *par) {
   // parameters which are different for the Left sender and the Right sender
   int ip_version = p->ip_version;
   rte_mempool *pkt_pool = p->pkt_pool;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   struct ether_addr *dst_mac = p->dst_mac;
   struct ether_addr *src_mac = p->src_mac;
@@ -766,7 +768,7 @@ int rsendLatency(void *par) {
   // parameters directly correspond to the data members of class rSenderParameters
   unsigned state_table_size = p->state_table_size;
   atomicFourTuple *stateTable = p->stateTable;
-  unsigned responder_ports = p->responder_ports;
+  unsigned responder_tuples = p->responder_tuples;
 
 
   // further local variables
@@ -779,7 +781,7 @@ int rsendLatency(void *par) {
   unsigned index;       // current state table index for reading a 4-tuple (used when 'responder-ports' is 1 or 2)
   fourTuple ft;         // 4-tuple is read from the state table into this
   bool fg_frame;        // the current frame belongs to the foreground traffic: will be handled in a stateful way (if it is IPv4)
-  if ( !responder_ports ) {
+  if ( !responder_tuples ) {
     // optimized code for using a single 4-tuple taken from the very first preliminary frame (as foreground traffic)
     // ( similar to using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4 )
     ft = stateTable[0];   // read only once
@@ -916,9 +918,9 @@ int rsendLatency(void *par) {
     // 3: index for reading four tuple is pseudorandom in the range of [0, state_table_size-1]
     // 3 is believed to be the best implementation of RFC 4814 pseudorandom port numbers for stateful tests,
     // increasing and decreasing ones are our additional, non-stantard, computationally cheaper solutions
-    if ( responder_ports == 1 )
+    if ( responder_tuples == 1 )
       index = 0;
-    else if ( responder_ports == 2 )
+    else if ( responder_tuples == 2 )
       index = state_table_size-1;
     uint32_t ipv4_zero = 0;     // IPv4 address 0.0.0.0 used as a placeholder for UDP checksum calculation (value will be set later)
     if ( num_dest_nets== 1 ) {
@@ -930,11 +932,11 @@ int rsendLatency(void *par) {
       struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N], *pkt_mbuf; // message buffers for fg. and bg. Test Frames
       uint8_t *pkt; // working pointer to the current frame (in the message buffer)
       uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N], *bg_udp_sport[N], *bg_udp_dport[N], *bg_udp_chksum[N]; // pointers to the given fields
-      uint8_t *fg_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests
-      ipv4_hdr *ipv4_hdr_start; // used for IPv4 header checksum calculation
+      uint8_t *fg_rte_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests
+      rte_ipv4_hdr *rte_ipv4_hdr_start; // used for IPv4 header checksum calculation
       uint8_t *lat_udp_sport[num_timestamps], *lat_udp_dport[num_timestamps], *lat_udp_chksum[num_timestamps]; // pointers to the given fields
-      uint8_t *lat_ipv4_hdr[num_timestamps], *lat_ipv4_chksum[num_timestamps], *lat_ipv4_src[num_timestamps], *lat_ipv4_dst[num_timestamps]; // further ones for stateful tests
-      ipv4_hdr *lat_ipv4_hdr_start; // used for IPv4 header checksum calculation
+      uint8_t *lat_rte_ipv4_hdr[num_timestamps], *lat_ipv4_chksum[num_timestamps], *lat_ipv4_src[num_timestamps], *lat_ipv4_dst[num_timestamps]; // further ones for stateful tests
+      rte_ipv4_hdr *lat_rte_ipv4_hdr_start; // used for IPv4 header checksum calculation
       uint16_t *udp_sport, *udp_dport, *udp_chksum, *ipv4_chksum; // working pointers to the given fields
       uint32_t *ipv4_src, *ipv4_dst; // further ones for stateful tests
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start;  // starting values (uncomplemented checksums taken from the original frames)
@@ -948,7 +950,7 @@ int rsendLatency(void *par) {
           // All IPv4 addresses and port numbers are set to 0.
           fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
-          fg_ipv4_hdr[i] = pkt + 14;
+          fg_rte_ipv4_hdr[i] = pkt + 14;
           fg_ipv4_chksum[i] = pkt + 24;
           fg_ipv4_src[i] = pkt + 26;
           fg_ipv4_dst[i] = pkt + 30;
@@ -984,7 +986,7 @@ int rsendLatency(void *par) {
           if ( ip_version == 4 ) {
             latency_frames[i] = mkLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1, i);
             pkt = rte_pktmbuf_mtod(latency_frames[i], uint8_t *); // Access the Test Frame in the message buffer
-            lat_ipv4_hdr[i] = pkt + 14;
+            lat_rte_ipv4_hdr[i] = pkt + 14;
             lat_ipv4_chksum[i] = pkt + 24;
             lat_ipv4_src[i] = pkt + 26;
             lat_ipv4_dst[i] = pkt + 30;
@@ -1037,7 +1039,7 @@ int rsendLatency(void *par) {
           udp_sport = (uint16_t *)lat_udp_sport[latency_timestamp_no];
           udp_dport = (uint16_t *)lat_udp_dport[latency_timestamp_no];
           udp_chksum = (uint16_t *)lat_udp_chksum[latency_timestamp_no];
-          ipv4_hdr_start = (ipv4_hdr *)lat_ipv4_hdr[latency_timestamp_no];
+          rte_ipv4_hdr_start = (rte_ipv4_hdr *)lat_rte_ipv4_hdr[latency_timestamp_no];
           ipv4_chksum = (uint16_t *)lat_ipv4_chksum[latency_timestamp_no];
           ipv4_src = (uint32_t *)lat_ipv4_src[latency_timestamp_no];
           ipv4_dst = (uint32_t *)lat_ipv4_dst[latency_timestamp_no];
@@ -1054,7 +1056,7 @@ int rsendLatency(void *par) {
             udp_sport = (uint16_t *)fg_udp_sport[i];
             udp_dport = (uint16_t *)fg_udp_dport[i];
             udp_chksum = (uint16_t *)fg_udp_chksum[i];
-            ipv4_hdr_start = (ipv4_hdr *)fg_ipv4_hdr[i];
+            rte_ipv4_hdr_start = (rte_ipv4_hdr *)fg_rte_ipv4_hdr[i];
             ipv4_chksum = (uint16_t *)fg_ipv4_chksum[i];
             ipv4_src = (uint32_t *)fg_ipv4_src[i];        // this is rubbish if IP version is 6
             ipv4_dst = (uint32_t *)fg_ipv4_dst[i];        // this is rubbish if IP version is 6
@@ -1073,7 +1075,7 @@ int rsendLatency(void *par) {
         // from here, we need to handle the frame identified by the temprary variables
         if ( ip_version == 4 && fg_frame ) {
           // this frame is handled in a stateful way
-          switch ( responder_ports ) {                  // here, it is surely not 0
+          switch ( responder_tuples ) {                  // here, it is surely not 0
             case 1:
               ft=stateTable[index++];
               index = index % state_table_size;
@@ -1103,7 +1105,7 @@ int rsendLatency(void *par) {
             chksum = 0xffff;
           *udp_chksum = (uint16_t) chksum;              // set checksum in the frame
           *ipv4_chksum = 0;                             // IPv4 header checksum is set to 0
-          *ipv4_chksum = rte_ipv4_cksum(ipv4_hdr_start);        // IPv4 header checksum is set now
+          *ipv4_chksum = rte_ipv4_cksum(rte_ipv4_hdr_start);        // IPv4 header checksum is set now
           // this is the end of handling the frame in a stateful way
         } else {
           // this frame is handled in the old way
@@ -1171,11 +1173,11 @@ int rsendLatency(void *par) {
       uint8_t *pkt; // working pointer to the current frame (in the message buffer)
       uint8_t *fg_udp_sport[N], *fg_udp_dport[N], *fg_udp_chksum[N]; // pointers to the given fields of the pre-prepared Test Frames
       uint8_t *bg_udp_sport[256][N], *bg_udp_dport[256][N], *bg_udp_chksum[256][N]; // pointers to the given fields of the pre-prepared Test Frames
-      uint8_t *fg_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests, but not per dest. networks!
-      ipv4_hdr *ipv4_hdr_start; // used for IPv4 header checksum calculation
+      uint8_t *fg_rte_ipv4_hdr[N], *fg_ipv4_chksum[N], *fg_ipv4_src[N], *fg_ipv4_dst[N]; // further ones for stateful tests, but not per dest. networks!
+      rte_ipv4_hdr *rte_ipv4_hdr_start; // used for IPv4 header checksum calculation
       uint8_t *lat_udp_sport[num_timestamps], *lat_udp_dport[num_timestamps], *lat_udp_chksum[num_timestamps]; // pointers to the given fields
-      uint8_t *lat_ipv4_hdr[num_timestamps], *lat_ipv4_chksum[num_timestamps], *lat_ipv4_src[num_timestamps], *lat_ipv4_dst[num_timestamps]; // further ones for stateful tests
-      ipv4_hdr *lat_ipv4_hdr_start; // used for IPv4 header checksum calculation
+      uint8_t *lat_rte_ipv4_hdr[num_timestamps], *lat_ipv4_chksum[num_timestamps], *lat_ipv4_src[num_timestamps], *lat_ipv4_dst[num_timestamps]; // further ones for stateful tests
+      rte_ipv4_hdr *lat_rte_ipv4_hdr_start; // used for IPv4 header checksum calculation
       uint16_t *udp_sport, *udp_dport, *udp_chksum, *ipv4_chksum; // working pointers to the given fields
       uint32_t *ipv4_src, *ipv4_dst; // further ones for stateful tests
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
@@ -1192,7 +1194,7 @@ int rsendLatency(void *par) {
         if ( ip_version == 4 ) {
           fg_pkt_mbuf[j] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[j], uint8_t *); // Access the Test Frame in the message buffer
-          fg_ipv4_hdr[j] = pkt + 14;
+          fg_rte_ipv4_hdr[j] = pkt + 14;
           fg_ipv4_chksum[j] = pkt + 24;
           fg_ipv4_src[j] = pkt + 26;
           fg_ipv4_dst[j] = pkt + 30;
@@ -1245,7 +1247,7 @@ int rsendLatency(void *par) {
           if ( ip_version == 4 ) { 
             latency_frames[i] = mkLatencyFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1, i);
             pkt = rte_pktmbuf_mtod(latency_frames[i], uint8_t *); // Access the Test Frame in the message buffer
-            lat_ipv4_hdr[i] = pkt + 14;
+            lat_rte_ipv4_hdr[i] = pkt + 14;
             lat_ipv4_chksum[i] = pkt + 24;
             lat_ipv4_src[i] = pkt + 26;
             lat_ipv4_dst[i] = pkt + 30;
@@ -1290,7 +1292,7 @@ int rsendLatency(void *par) {
           udp_sport = (uint16_t *)lat_udp_sport[latency_timestamp_no];
           udp_dport = (uint16_t *)lat_udp_dport[latency_timestamp_no];
           udp_chksum = (uint16_t *)lat_udp_chksum[latency_timestamp_no];
-          ipv4_hdr_start = (ipv4_hdr *)lat_ipv4_hdr[latency_timestamp_no];
+          rte_ipv4_hdr_start = (rte_ipv4_hdr *)lat_rte_ipv4_hdr[latency_timestamp_no];
           ipv4_chksum = (uint16_t *)lat_ipv4_chksum[latency_timestamp_no];
           ipv4_src = (uint32_t *)lat_ipv4_src[latency_timestamp_no];
           ipv4_dst = (uint32_t *)lat_ipv4_dst[latency_timestamp_no];
@@ -1307,7 +1309,7 @@ int rsendLatency(void *par) {
             udp_sport = (uint16_t *)fg_udp_sport[i];
             udp_dport = (uint16_t *)fg_udp_dport[i];
             udp_chksum = (uint16_t *)fg_udp_chksum[i];
-            ipv4_hdr_start = (ipv4_hdr *)fg_ipv4_hdr[i];
+            rte_ipv4_hdr_start = (rte_ipv4_hdr *)fg_rte_ipv4_hdr[i];
             ipv4_chksum = (uint16_t *)fg_ipv4_chksum[i];
             ipv4_src = (uint32_t *)fg_ipv4_src[i];        // this is rubbish if IP version is 6
             ipv4_dst = (uint32_t *)fg_ipv4_dst[i];        // this is rubbish if IP version is 6
@@ -1327,7 +1329,7 @@ int rsendLatency(void *par) {
         // from here, we need to handle the frame identified by the temprary variables
         if ( ip_version == 4 && fg_frame ) {
           // this frame is handled in a stateful way
-          switch ( responder_ports ) {                  // here, it is surely not 0
+          switch ( responder_tuples ) {                  // here, it is surely not 0
             case 1:
               ft=stateTable[index++];
               index = index % state_table_size;
@@ -1357,7 +1359,7 @@ int rsendLatency(void *par) {
             chksum = 0xffff;
           *udp_chksum = (uint16_t) chksum;              // set checksum in the frame
           *ipv4_chksum = 0;                             // IPv4 header checksum is set to 0
-          *ipv4_chksum = rte_ipv4_cksum(ipv4_hdr_start);        // IPv4 header checksum is set now
+          *ipv4_chksum = rte_ipv4_cksum(rte_ipv4_hdr_start);        // IPv4 header checksum is set now
           // this is the end of handling the frame in a stateful way
         } else {
           // this frame is handled in the old way
@@ -1434,7 +1436,7 @@ int receiveLatency(void *par) {
   // collecting input parameters:
   class receiverParametersLatency *p = (class receiverParametersLatency *)par;
   uint64_t finish_receiving = p->finish_receiving;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   uint16_t num_timestamps =  p->num_timestamps;
   uint64_t *receive_ts = p->receive_ts; 
@@ -1498,7 +1500,7 @@ int rreceiveLatency(void *par) {
   // collecting input parameters:
   class rReceiverParametersLatency *p = (class rReceiverParametersLatency *)par;
   uint64_t finish_receiving = p->finish_receiving;
-  uint8_t eth_id = p->eth_id;
+  uint16_t eth_id = p->eth_id;
   const char *side = p->side;
   unsigned state_table_size = p->state_table_size;
   unsigned *valid_entries = p->valid_entries;
@@ -1697,7 +1699,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
       iSenderParameters ispars1(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
                                 fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-                                enumerate_ports,pre_frames);
+                                enumerate_ports,pre_frames,uniquePortComb);
   
       // start left sender
       if ( rte_eal_remote_launch(isend, &ispars1, cpu_left_sender) )
@@ -1717,7 +1719,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
       rte_eal_wait_lcore(cpu_right_receiver);
   
       if ( valid_entries < state_table_size )
-        rte_exit(EXIT_FAILURE, "Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
+        printf("Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
       else
         std::cout << "Info: Preliminary phase finished." << std::endl;
       // this is the end of code reuse
@@ -1763,7 +1765,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
         rSenderParametersLatency spars2(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
                                         ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
                                         rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
-					state_table_size,stateTable,responder_ports,right_send_ts);
+					state_table_size,stateTable,responder_tuples,right_send_ts);
   
         // start right sender
         if (rte_eal_remote_launch(rsendLatency, &spars2, cpu_right_sender) )
@@ -1807,7 +1809,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
       iSenderParameters ispars1(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
                                 ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
                                 fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-                                enumerate_ports,pre_frames);
+                                enumerate_ports,pre_frames,uniquePortComb);
   
       // start right sender
       if ( rte_eal_remote_launch(isend, &ispars1, cpu_right_sender) )
@@ -1827,7 +1829,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
       rte_eal_wait_lcore(cpu_left_receiver);
   
       if ( valid_entries < state_table_size )
-        rte_exit(EXIT_FAILURE, "Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
+        printf("Error: Failed to fill state table (valid entries: %u, state table size: %u)!\n", valid_entries, state_table_size);
       else
         std::cout << "Info: Preliminary phase finished." << std::endl;
       // this is the end of code reuse
@@ -1871,7 +1873,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
         rSenderParametersLatency spars2(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
                                         ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
                                         rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
-					state_table_size,stateTable,responder_ports,left_send_ts);
+					state_table_size,stateTable,responder_tuples,left_send_ts);
   
         // start left sender
         if (rte_eal_remote_launch(rsendLatency, &spars2, cpu_left_sender) )
@@ -1918,7 +1920,7 @@ senderCommonParametersLatency::senderCommonParametersLatency(uint16_t ipv6_frame
   num_timestamps = num_timestamps_;
 }
 
-senderParametersLatency::senderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+senderParametersLatency::senderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                                                   struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                                                   struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                                                   uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -1928,25 +1930,25 @@ senderParametersLatency::senderParametersLatency(class senderCommonParameters *c
   send_ts = send_ts_;
 }
 
-rSenderParametersLatency::rSenderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+rSenderParametersLatency::rSenderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                                                   struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                                                   struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                                                   uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
                                                   uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
-						  unsigned state_table_size_, atomicFourTuple *stateTable_, unsigned responder_ports_, uint64_t *send_ts_) :
+						  unsigned state_table_size_, atomicFourTuple *stateTable_, unsigned responder_tuples_, uint64_t *send_ts_) :
   rSenderParameters(cp_,ip_version_,pkt_pool_,eth_id_,side_,dst_mac_,src_mac_,src_ipv4_,dst_ipv4_,src_ipv6_,dst_ipv6_,src_bg_,dst_bg_,num_dest_nets_,
-                    var_sport_,var_dport_,sport_min_,sport_max_,dport_min_,dport_max_,state_table_size_,stateTable_,responder_ports_) {
+                    var_sport_,var_dport_,sport_min_,sport_max_,dport_min_,dport_max_,state_table_size_,stateTable_,responder_tuples_) {
   send_ts = send_ts_;
 }
     
-receiverParametersLatency::receiverParametersLatency(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, 
+receiverParametersLatency::receiverParametersLatency(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, 
 						     uint16_t num_timestamps_, uint64_t *receive_ts_) :
   receiverParameters(finish_receiving_,eth_id_,side_) {
   num_timestamps = num_timestamps_;
   receive_ts = receive_ts_;
 }
 
-rReceiverParametersLatency::rReceiverParametersLatency(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, unsigned state_table_size_,
+rReceiverParametersLatency::rReceiverParametersLatency(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, unsigned state_table_size_,
                       unsigned *valid_entries_, atomicFourTuple **stateTable_, uint16_t num_timestamps_, uint64_t *receive_ts_) :
   rReceiverParameters(finish_receiving_,eth_id_,side_,state_table_size_,valid_entries_,stateTable_) {
   num_timestamps = num_timestamps_;

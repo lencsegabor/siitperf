@@ -57,7 +57,7 @@ struct rte_mbuf *mkPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char 
 class senderParametersPdv : public senderParameters {
 public:
   uint64_t **send_ts;
-  senderParametersPdv(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  senderParametersPdv(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                           struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                           struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                           uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -67,7 +67,7 @@ public:
 class rSenderParametersPdv : public rSenderParameters {
 public:
   uint64_t **send_ts;
-  rSenderParametersPdv(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint8_t eth_id_, const char *side_,
+  rSenderParametersPdv(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                       struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                       struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
                       uint16_t num_dest_nets_, unsigned var_sport_, unsigned var_dport_,
@@ -80,7 +80,7 @@ class receiverParametersPdv : public receiverParameters {
   uint64_t num_frames;	// number of all frames, needed for the rte_zmalloc call for allocating receive_ts
   uint16_t frame_timeout;
   uint64_t **receive_ts;
-  receiverParametersPdv(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, 
+  receiverParametersPdv(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, 
                             uint64_t num_frames_, uint16_t frame_timeout_, uint64_t **receive_ts_);
 };
 
@@ -89,7 +89,7 @@ class rReceiverParametersPdv : public rReceiverParameters {
   uint64_t num_frames;  // number of all frames, needed for the rte_zmalloc call for allocating receive_ts
   uint16_t frame_timeout;
   uint64_t **receive_ts;
-  rReceiverParametersPdv(uint64_t finish_receiving_, uint8_t eth_id_, const char *side_, unsigned state_table_size_,
+  rReceiverParametersPdv(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, unsigned state_table_size_,
                         unsigned *valid_entries_, atomicFourTuple **stateTable_,
                         uint64_t num_frames_, uint16_t frame_timeout_, uint64_t **receive_ts_);
 };

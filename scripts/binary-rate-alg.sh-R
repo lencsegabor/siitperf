@@ -1,9 +1,9 @@
 #!/bin/bash
 #Parameters
-impl="p110-10G-p110-selftest44-Sf1-Ep3-40000x10000-R" # name of the tested implementation (used for logging)
-max=8000000 # maximum packet rate
-N=400000000 # number of preliminary frames
-M=400000000 # state table size
+impl="selftester-10G-selftest44-Sf1-Ep3-40000x100-R" # name of the tested implementation (used for logging)
+max=16000000 # maximum packet rate
+N=4000000 # number of preliminary frames
+M=4000000 # state table size
 T=500 # global timeout for preliminary phase
 D=0 # delay caused by the preliminary phase (will be computed)
 # DUT_IP=172.16.28.95
@@ -16,8 +16,8 @@ to=2000 # timeout in milliseconds
 n=2 # foreground traffic, if ( frame_counter % n < m ) 
 m=2 # E.g. n=m=2 is all foreground traffic; n=2,m=0 is all background traffic; n=10,m=9 is 90% fg and 10% bg
 sleept=10 # sleeping time between the experiments
-e=1 # measurement error: the difference betwen the values of the higher and the lower bound of the binary search, when finishing
-no_exp=20 # number of experiments
+e=1000 # measurement error: the difference betwen the values of the higher and the lower bound of the binary search, when finishing
+no_exp=10 # number of experiments
 res_dir="results" # base directory for the results (they will be copied there at the end)
 
 ############################
@@ -80,11 +80,16 @@ do
 				exit -1;
 			fi
 		fi
+		invalid=$(grep 'invalid' temp.out)
+		if [ -n "$invalid" ]; then
+			echo The test is INVALID due to insufficient sending rate.
+			echo The test is INVALID due to insufficient sending rate. >> ratetest.log
+		fi
 		# Collect and evaluate the results 
 		fwd_rec=$(grep 'Preliminary frames received:' temp.out | awk '{print $4}')
 		echo Forward: $fwd_rec frames were received from the required $N frames
 		echo Forward: $fwd_rec frames were received from the required $N frames >> ratetest.log
-		if [ $fwd_rec -eq $N ]; then
+		if [ $fwd_rec -eq $N ] && [ -z "$invalid" ]; then
 			l=$r
 			echo TEST PASSED
 			echo TEST PASSED >> ratetest.log
