@@ -67,6 +67,10 @@ int Latency::senderPoolSize(int num_dest_nets, int varport) {
   return Throughput::senderPoolSize(num_dest_nets,varport)+num_timestamps; // frames with timestamps are also pre-generated
 }
 
+int Latency::senderPoolSize(int num_dest_nets, int varport, int ip_varies) {
+  return Throughput::senderPoolSize(num_dest_nets,varport,ip_varies)+num_timestamps; // frames with timestamps are also pre-generated
+}
+
 // creates a special IPv4 Test Frame tagged for latency measurement using several helper functions
 // BEHAVIOR: it sets exatly, what it is told to set :-)
 struct rte_mbuf *mkFinalLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,

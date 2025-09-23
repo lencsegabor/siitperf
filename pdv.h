@@ -34,6 +34,7 @@ public:
   Pdv() : Throughput() { }; // default constructor
   int readCmdLine(int argc, const char *argv[]);	// reads further one argument: frame_timeout
   virtual int senderPoolSize(int numDestNets, int varport);
+  virtual int senderPoolSize(int numDestNets, int varport, int ip_varies);
 
   // perform pdv measurement
   void measure(uint16_t leftport, uint16_t rightport);

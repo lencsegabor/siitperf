@@ -56,6 +56,11 @@ int Pdv::senderPoolSize(int num_dest_nets, int varport) {
   // everything exists in N copies, see the definition of N
 }
 
+int Pdv::senderPoolSize(int num_dest_nets, int varport, int ip_varies) {
+  return 2*num_dest_nets*N + PORT_TX_QUEUE_SIZE + 100; // 2*: fg. and bg. Test Frames
+  // everything exists in N copies, see the definition of N
+}
+
 // creates a special IPv4 Test Frame for PDV measurement using several helper functions
 // BEHAVIOR: it sets exatly, what it is told to set :-)
 struct rte_mbuf *mkFinalPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,

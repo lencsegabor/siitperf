@@ -36,6 +36,7 @@ public:
   Latency() : Throughput() { }; // default constructor
   int readCmdLine(int argc, const char *argv[]);	// reads further two arguments
   virtual int senderPoolSize(int numDestNets, int varport);	// adds num_timestamps, too
+  virtual int senderPoolSize(int numDestNets, int varport, int ip_varies);	// adds num_timestamps, too
 
   // perform latency measurement
   void measure(uint16_t leftport, uint16_t rightport);
