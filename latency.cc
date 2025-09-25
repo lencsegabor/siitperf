@@ -94,7 +94,19 @@ struct rte_mbuf *mkFinalLatencyFrame4(uint16_t length, rte_mempool *pkt_pool, co
   mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkDataLatency(udp_data, data_legth, id);
-  udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  if ( sport && dport ) {
+    // The non-zero value of both port numbers means that they have fixed values in the test frame,
+    // therefore, final UDP checksum may be calculated and set.
+    udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  }
+  else {
+    // At least one of the port numbers will change, thus UDP checksum will need to be manipulated later.
+    uint32_t cksum = rte_raw_cksum(udp_hd, udp_length);
+    cksum += rte_ipv4_phdr_cksum(ip_hdr, 0);
+    cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);
+    cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);	// twice must be enough
+    udp_hd->dgram_cksum = (uint16_t)cksum; 	// The uncomplemented UDP checksum is stored (for further processing).
+  }
   ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);
   return pkt_mbuf;
 }
@@ -133,7 +145,17 @@ struct rte_mbuf *mkFinalLatencyFrame6(uint16_t length, rte_mempool *pkt_pool, co
   mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkDataLatency(udp_data, data_legth, id);
-  udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  uint16_t cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated
+  if ( sport && dport ) {
+    // The non-zero value of both port numbers means that they have fixed values in the test frame,
+    // therefore, final UDP checksum may be set.
+    udp_hd->dgram_cksum = cksum;	// The final UDP checksum is set.
+  }
+  else {
+    // At least one of the port numbers will change, thus UDP checksum will need to be manipulated later.
+    udp_hd->dgram_cksum = ~cksum;      // The uncomplemented UDP checksum is stored (for further processing).
+  }
+
   return pkt_mbuf;
 }
 
@@ -211,6 +233,8 @@ int sendLatency(void *par) {
   double elapsed_seconds; // for checking the elapsed seconds during sending
   int latency_test_time = duration-delay;	// lenght of the time interval, while latency frames are sent
   uint64_t frames_to_send_during_latency_test = latency_test_time * frame_rate; // precalcalculated value to speed up calculation in the loop
+
+  bool fg_frame, ipv4_frame; // when sending IPv4 traffic, background frames are IPv6: their UDP checksum may be 0.
 
   if ( !varport ) {
     // optimized code for using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4
@@ -443,14 +467,14 @@ int sendLatency(void *par) {
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         if ( unlikely( sent_frames == send_next_latency_frame ) ) {
           // a latency frame is to be sent
-          chksum = ~*(uint16_t *)lat_udp_chksum[latency_timestamp_no]; // take the value of the uncomplemented checksum
+          chksum = *(uint16_t *)lat_udp_chksum[latency_timestamp_no]; // take the value of the uncomplemented checksum
           udp_sport = (uint16_t *)lat_udp_sport[latency_timestamp_no];
           udp_dport = (uint16_t *)lat_udp_dport[latency_timestamp_no];
           udp_chksum = (uint16_t *)lat_udp_chksum[latency_timestamp_no];
           pkt_mbuf = latency_frames[latency_timestamp_no];
         } else {
           // normal test frame is to be sent
-          if ( sent_frames % n  < m ) {
+          if ( fg_frame = sent_frames % n  < m ) {
             // foreground frame is to be sent
             chksum = fg_udp_chksum_start;
             udp_sport = (uint16_t *)fg_udp_sport[i];
@@ -466,6 +490,8 @@ int sendLatency(void *par) {
             pkt_mbuf = bg_pkt_mbuf[i];
           }
         }
+        ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+
         // from here, we need to handle the frame identified by the temprary variables
         if ( var_sport ) {
           // sport is varying
@@ -500,8 +526,9 @@ int sendLatency(void *par) {
           chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                    // make one's complement
-        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+        if ( ipv4_frame && chksum == 0 )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -639,7 +666,7 @@ int sendLatency(void *par) {
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         if ( unlikely( sent_frames == send_next_latency_frame ) ) {
           // a latency frame is to be sent
-          chksum = ~*(uint16_t *)lat_udp_chksum[latency_timestamp_no]; // take the value of the uncomplemented checksum
+          chksum = *(uint16_t *)lat_udp_chksum[latency_timestamp_no]; // take the value of the uncomplemented checksum
           udp_sport = (uint16_t *)lat_udp_sport[latency_timestamp_no];
           udp_dport = (uint16_t *)lat_udp_dport[latency_timestamp_no];
           udp_chksum = (uint16_t *)lat_udp_chksum[latency_timestamp_no];
@@ -647,7 +674,7 @@ int sendLatency(void *par) {
         } else {
           // normal test frame is to be sent
           int index = uni_dis_net(gen_net); // index of the pre-generated frame 
-          if ( sent_frames % n  < m ) {
+          if ( fg_frame = sent_frames % n  < m ) {
             // foreground frame is to be sent
             chksum = fg_udp_chksum_start[index];
             udp_sport = (uint16_t *)fg_udp_sport[index][i];
@@ -663,6 +690,8 @@ int sendLatency(void *par) {
             pkt_mbuf = bg_pkt_mbuf[index][i];
           }
         }
+        ipv4_frame = ip_version == 4 && fg_frame; // precalculated to have it ready when needed
+
         // from here, we need to handle the frame identified by the temprary variables
         if ( var_sport ) {
           // sport is varying
@@ -697,8 +726,9 @@ int sendLatency(void *par) {
           chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                    // make one's complement
-        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+        if ( ipv4_frame && chksum == 0 )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -969,7 +999,7 @@ int rsendLatency(void *par) {
           fg_udp_chksum[i] = pkt + 60;
 	}
 	fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
-    
+                           // ^ to be removed when Test Frame generation will be corrected, also for IPv6 below ***** 
         // create backround Test Frame (always IPv6)
         bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
@@ -1039,7 +1069,7 @@ int rsendLatency(void *par) {
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         if ( unlikely( sent_frames == send_next_latency_frame ) ) {
           // a latency frame is to be sent
-          chksum = ~*(uint16_t *)lat_udp_chksum[latency_timestamp_no]; // take the value of the uncomplemented checksum
+          chksum = *(uint16_t *)lat_udp_chksum[latency_timestamp_no]; // take the value of the uncomplemented checksum
           udp_sport = (uint16_t *)lat_udp_sport[latency_timestamp_no];
           udp_dport = (uint16_t *)lat_udp_dport[latency_timestamp_no];
           udp_chksum = (uint16_t *)lat_udp_chksum[latency_timestamp_no];
@@ -1048,13 +1078,10 @@ int rsendLatency(void *par) {
           ipv4_src = (uint32_t *)lat_ipv4_src[latency_timestamp_no];
           ipv4_dst = (uint32_t *)lat_ipv4_dst[latency_timestamp_no];
           pkt_mbuf = latency_frames[latency_timestamp_no];
-	  if ( sent_frames % n  < m ) 
-	    fg_frame = 1;
-	  else
-	    fg_frame = 0;
+	  fg_frame = sent_frames % n  < m;
         } else {
           // normal test frame is to be sent
-          if ( sent_frames % n  < m ) {
+          if ( fg_frame = sent_frames % n  < m ) {
             // foreground frame is to be sent
             chksum = fg_udp_chksum_start;
             udp_sport = (uint16_t *)fg_udp_sport[i];
@@ -1065,7 +1092,6 @@ int rsendLatency(void *par) {
             ipv4_src = (uint32_t *)fg_ipv4_src[i];        // this is rubbish if IP version is 6
             ipv4_dst = (uint32_t *)fg_ipv4_dst[i];        // this is rubbish if IP version is 6
             pkt_mbuf = fg_pkt_mbuf[i];
-            fg_frame = 1;
           } else {
             // background frame is to be sent
             chksum = bg_udp_chksum_start;
@@ -1073,7 +1099,6 @@ int rsendLatency(void *par) {
             udp_dport = (uint16_t *)bg_udp_dport[i];
             udp_chksum = (uint16_t *)bg_udp_chksum[i];
             pkt_mbuf = bg_pkt_mbuf[i];
-            fg_frame = 0;
           }
         }
         // from here, we need to handle the frame identified by the temprary variables
@@ -1103,7 +1128,8 @@ int rsendLatency(void *par) {
           *udp_dport = ft.init_port;
           // calculate checksum....
           chksum += rte_raw_cksum(&ft,12);
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // reduce to 32 bits
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
           chksum = (~chksum) & 0xffff;                                  // make one's complement
           if (chksum == 0)                                              // checksum should not be 0 (0 means, no checksum is used)
             chksum = 0xffff;
@@ -1146,9 +1172,9 @@ int rsendLatency(void *par) {
             chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
           }
           chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
           chksum = (~chksum) & 0xffff;                                    // make one's complement
-          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-            chksum = 0xffff;
+          // this is not an IPv4 frame
           *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
           // this is the end of handling the frame in the old way
         }
@@ -1292,7 +1318,7 @@ int rsendLatency(void *par) {
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ // Main cycle for the number of frames to send
         if ( unlikely( sent_frames == send_next_latency_frame ) ) {
           // a latency frame is to be sent
-          chksum = ~*(uint16_t *)lat_udp_chksum[latency_timestamp_no]; // take the value of the uncomplemented checksum
+          chksum = *(uint16_t *)lat_udp_chksum[latency_timestamp_no]; // take the value of the uncomplemented checksum
           udp_sport = (uint16_t *)lat_udp_sport[latency_timestamp_no];
           udp_dport = (uint16_t *)lat_udp_dport[latency_timestamp_no];
           udp_chksum = (uint16_t *)lat_udp_chksum[latency_timestamp_no];
@@ -1301,13 +1327,10 @@ int rsendLatency(void *par) {
           ipv4_src = (uint32_t *)lat_ipv4_src[latency_timestamp_no];
           ipv4_dst = (uint32_t *)lat_ipv4_dst[latency_timestamp_no];
           pkt_mbuf = latency_frames[latency_timestamp_no];
-          if ( sent_frames % n  < m )
-            fg_frame = 1;
-          else
-            fg_frame = 0;
+          fg_frame = sent_frames % n  < m; 
         } else {
           // normal test frame is to be sent
-          if ( sent_frames % n  < m ) {
+          if ( fg_frame = sent_frames % n  < m ) {
             // foreground frame is to be sent
             chksum = fg_udp_chksum_start;
             udp_sport = (uint16_t *)fg_udp_sport[i];
@@ -1318,7 +1341,6 @@ int rsendLatency(void *par) {
             ipv4_src = (uint32_t *)fg_ipv4_src[i];        // this is rubbish if IP version is 6
             ipv4_dst = (uint32_t *)fg_ipv4_dst[i];        // this is rubbish if IP version is 6
             pkt_mbuf = fg_pkt_mbuf[i];
-            fg_frame = 1;
           } else {
             // background frame is to be sent
             int net_index = uni_dis_net(gen_net); // index of the pre-generated frame 
@@ -1327,7 +1349,6 @@ int rsendLatency(void *par) {
             udp_dport = (uint16_t *)bg_udp_dport[net_index][i];
             udp_chksum = (uint16_t *)bg_udp_chksum[net_index][i];
             pkt_mbuf = bg_pkt_mbuf[net_index][i];
-            fg_frame = 0;
           }
         }
         // from here, we need to handle the frame identified by the temprary variables
@@ -1357,7 +1378,8 @@ int rsendLatency(void *par) {
           *udp_dport = ft.init_port;
           // calculate checksum....
           chksum += rte_raw_cksum(&ft,12);
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // reduce to 32 bits
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
           chksum = (~chksum) & 0xffff;                                  // make one's complement
           if (chksum == 0)                                              // checksum should not be 0 (0 means, no checksum is used)
             chksum = 0xffff;
@@ -1400,9 +1422,9 @@ int rsendLatency(void *par) {
             chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
           }
           chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
           chksum = (~chksum) & 0xffff;                                    // make one's complement
-          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-            chksum = 0xffff;
+          // this is not an IPv4 frame
           *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
           // this is the end of handling the frame in the old way
         }
