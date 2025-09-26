@@ -80,11 +80,15 @@ struct rte_mbuf *mkFinalPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const 
   mkEthHeader(eth_hdr, dst_mac, src_mac, 0x0800);       // contains an IPv4 packet
   int ip_length = length - sizeof(rte_ether_hdr);
   mkIpv4Header(ip_hdr, ip_length, src_ip, dst_ip);      // Does not set IPv4 header checksum
-  int udp_length = ip_length - sizeof(rte_ipv4_hdr);        // No IP Options are used
+  int udp_length = ip_length - sizeof(rte_ipv4_hdr);    // No IP Options are used
   mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkDataPdv(udp_data, data_legth);
-  udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  uint32_t cksum = rte_raw_cksum(udp_hd, udp_length);
+  cksum += rte_ipv4_phdr_cksum(ip_hdr, 0);
+  cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);
+  cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);      // twice must be enough
+  udp_hd->dgram_cksum = (uint16_t)cksum;        // The uncomplemented UDP checksum is stored (for further processing).
   ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);        // IPv4 header checksum is set now
   return pkt_mbuf;
 }
@@ -123,7 +127,8 @@ struct rte_mbuf *mkFinalPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const 
   mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkDataPdv(udp_data, data_legth);
-  udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  uint16_t cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated
+  udp_hd->dgram_cksum = ~cksum;      // The uncomplemented UDP checksum is stored (for further processing).
   return pkt_mbuf;
 }
 
@@ -200,6 +205,10 @@ int sendPdv(void *par) {
       rte_exit(EXIT_FAILURE, "Error: Receiver can't allocate memory for timestamps!\n");
   *send_ts = snd_ts; // return the address of the array to the caller function
 
+  bool fg_frame, ipv4_frame; // when sending IPv4 traffic, background frames are IPv6: their UDP checksum may be 0.
+  uint32_t chksum; 	// temporary variable for shecksum calculation
+  uint16_t *chksump;	// pointer to the checksum of the handled frame
+
   if ( !varport ) {
     // optimized code for using hard coded fix port numbers as defined in RFC 2544 https://tools.ietf.org/html/rfc2544#appendix-C.2.6.4
     if ( num_dest_nets== 1 ) {
@@ -207,11 +216,10 @@ int sendPdv(void *par) {
       // but it is updated regarding counter and UDP checksum
       // N size arrays are used to resolve the write after send problem
       int i; // cycle variable for the above mentioned purpose: takes {0..N-1} values
-      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N]; // pointers of message buffers for fg. and bg. PDV Frames
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N], *pkt_mbuf; // pointers of message buffers for fg. and bg. PDV Frames
       uint8_t *pkt; // working pointer to the current frame (in the message buffer)
       uint8_t *fg_udp_chksum[N], *bg_udp_chksum[N], *fg_counter[N], *bg_counter[N]; 	// pointers to the given fields
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start; 	// starting values (uncomplemented checksums taken from the original frames)
-      uint32_t chksum; // temporary variable for shecksum calculation
   
       // create PDV Test Frames 
       for ( i=0; i<N; i++ ) {
@@ -227,43 +235,42 @@ int sendPdv(void *par) {
           fg_udp_chksum[i] = pkt + 60;
           fg_counter[i] = pkt + 70;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
         // create backround PDV Frame (always IPv6)
         bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
         pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
         bg_udp_chksum[i] = pkt + 60;
         bg_counter[i] = pkt + 70;
-        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       }
   
       // naive sender version: it is simple and fast
       i=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ) {	// Main cycle for the number of frames to send
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
-          *(uint64_t *)fg_counter[i] = sent_frames;			// set the counter in the frame 
-          chksum = fg_udp_chksum_start + rte_raw_cksum(&sent_frames,8); 	// add the checksum of the counter to the initial checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);	// calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;					// make one's complement
-          if (chksum == 0)						// checksum should not be 0 (0 means, no checksum is used)
-             chksum = 0xffff;
-          *(uint16_t *)fg_udp_chksum[i] = (uint16_t) chksum;		// set checksum in the frame
-          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
-          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[i], 1) ); 	// send foreground frame
-          snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
+          *(uint64_t *)fg_counter[i] = sent_frames;	// set the counter in the frame
+          chksum = fg_udp_chksum_start;
+          chksump = (uint16_t *)fg_udp_chksum[i];
+          pkt_mbuf = fg_pkt_mbuf[i];
         } else {
           // background frame is to be sent
-          *(uint64_t *)bg_counter[i] = sent_frames;			// set the counter in the frame 
-          chksum = bg_udp_chksum_start + rte_raw_cksum(&sent_frames,8);   // add the checksum of the counter to the initial checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                    // make one's complement
-          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-             chksum = 0xffff;
-          *(uint16_t *)bg_udp_chksum[i] = (uint16_t) chksum;              // set checksum in the frame
-          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
-          while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[i], 1) ); 	// send background frame
-          snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
+          *(uint64_t *)bg_counter[i] = sent_frames;	// set the counter in the frame
+          chksum = bg_udp_chksum_start;
+          chksump = (uint16_t *)bg_udp_chksum[i];
+          pkt_mbuf = bg_pkt_mbuf[i];
         }
+        chksum += rte_raw_cksum(&sent_frames,8); 	// add the checksum of the counter to the initial checksum value
+        ipv4_frame = ip_version == 4 && fg_frame; 	// precalculated to have it ready when needed
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);	// calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+        chksum = (~chksum) & 0xffff;					// make one's complement
+        if ( unlikely( ipv4_frame && chksum == 0 ) )	// over IPv4, checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *chksump = (uint16_t) chksum;		// set checksum in the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) ); 		// send out the frame
+        snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
         i = (i+1) % N;
       } // this is the end of the sending cycle
     } // end of optimized code for single destination network
@@ -273,11 +280,10 @@ int sendPdv(void *par) {
       // N size arrays are used to resolve the write after send problem
       int j; // cycle variable for the above mentioned purpose: takes {0..N-1} values
       // num_dest_nets <= 256
-      struct rte_mbuf *fg_pkt_mbuf[256][N], *bg_pkt_mbuf[256][N]; // pointers of message buffers for fg. and bg. PDV Frames
+      struct rte_mbuf *fg_pkt_mbuf[256][N], *bg_pkt_mbuf[256][N], *pkt_mbuf; // pointers of message buffers for fg. and bg. PDV Frames
       uint8_t *pkt; // working pointer to the current frame (in the message buffer)
       uint8_t *fg_udp_chksum[256][N], *bg_udp_chksum[256][N], *fg_counter[256][N], *bg_counter[256][N];   // pointers to the given fields
       uint16_t fg_udp_chksum_start[256], bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
-      uint32_t chksum; // temporary variable for shecksum calculation
       uint32_t curr_dst_ipv4;     // IPv4 destination address, which will be changed
       in6_addr curr_dst_ipv6;     // foreground IPv6 destination address, which will be changed
       in6_addr curr_dst_bg;       // backround IPv6 destination address, which will be changed
@@ -306,14 +312,14 @@ int sendPdv(void *par) {
             fg_udp_chksum[i][j] = pkt + 60;
             fg_counter[i][j] = pkt + 70;
           }
-          fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          fg_udp_chksum_start[i] = *(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
           // create backround Test Frame (always IPv6)
           ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
           bg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, 0, 0);
           pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
           bg_udp_chksum[i][j] = pkt + 60;
           bg_counter[i][j] = pkt + 70;
-          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          bg_udp_chksum_start[i] = *(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
         }
       }
   
@@ -328,29 +334,30 @@ int sendPdv(void *par) {
       j=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ 	// Main cycle for the number of frames to send
         int index = uni_dis(gen); // index of the pre-generated frame 
-        if ( sent_frames % n  < m ) {
-          *(uint64_t *)fg_counter[index][j] = sent_frames;                        // set the counter in the frame
-          chksum = fg_udp_chksum_start[index] + rte_raw_cksum(&sent_frames,8);   	// add the checksum of the counter to the initial checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     	// calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                    	// make one's complement
-          if (chksum == 0)                                                	// checksum should not be 0 (0 means, no checksum is used)
-             chksum = 0xffff;
-          *(uint16_t *)fg_udp_chksum[index][j] = (uint16_t) chksum;               // set checksum in the frame
-          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    	// Beware: an "empty" loop, as well as in the next line
-          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[index][j], 1) );      // send foreground frame
-          snd_ts[sent_frames] = rte_rdtsc();                              	// store timestamp
+        if ( fg_frame = sent_frames % n  < m ) {
+          // foreground frame is to be sent
+          *(uint64_t *)fg_counter[index][j] = sent_frames;                      // set the counter in the frame
+          chksum = fg_udp_chksum_start[index];
+          chksump = (uint16_t *)fg_udp_chksum[index][j];
+          pkt_mbuf = fg_pkt_mbuf[index][j];
         } else {
-          *(uint64_t *)bg_counter[index][j] = sent_frames;                        // set the counter in the frame
-          chksum = bg_udp_chksum_start[index] + rte_raw_cksum(&sent_frames,8);   	// add the checksum of the counter to the initial checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     	// calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                    	// make one's complement
-          if (chksum == 0)                                                	// checksum should not be 0 (0 means, no checksum is used)
-             chksum = 0xffff;
-          *(uint16_t *)bg_udp_chksum[index][j] = (uint16_t) chksum;               // set checksum in the frame
-          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    	// Beware: an "empty" loop, as well as in the next line
-          while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[index][j], 1) );      // send foreground frame
-          snd_ts[sent_frames] = rte_rdtsc();                              	// store timestamp
+          // background frame is to be sent
+          *(uint64_t *)bg_counter[index][j] = sent_frames;                      // set the counter in the frame
+          chksum = bg_udp_chksum_start[index];
+          chksump = (uint16_t *)bg_udp_chksum[index][j];
+          pkt_mbuf = bg_pkt_mbuf[index][j];
         }
+        chksum += rte_raw_cksum(&sent_frames,8);   	// add the checksum of the counter to the initial checksum value
+        ipv4_frame = ip_version == 4 && fg_frame;       // precalculated to have it ready when needed
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+        chksum = (~chksum) & 0xffff;                                    // make one's complement
+        if ( unlikely( ipv4_frame && chksum == 0 ) )    // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *chksump = (uint16_t) chksum;           // set checksum in the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    // Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );           // send out the frame
+        snd_ts[sent_frames] = rte_rdtsc();                              // store timestamp
         j = (j+1) % N;
       } // this is the end of the sending cycle
     } // end of optimized code for multiple destination networks
@@ -370,7 +377,6 @@ int sendPdv(void *par) {
       uint16_t *udp_sport, *udp_dport, *udp_chksum; // working pointers to the given fields
       uint64_t *counter; // working pointer to the counter in the currently manipulated frame
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start;  // starting values (uncomplemented checksums taken from the original frames)
-      uint32_t chksum; // temporary variable for shecksum calculation
       uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done
       uint16_t sp, dp; // values of source and destination port numbers -- temporary values
 
@@ -378,29 +384,29 @@ int sendPdv(void *par) {
       for ( i=0; i<N; i++ ) {
         // create foreground PDV Frame (IPv4 or IPv6)
         if ( ip_version == 4 ) {
-          fg_pkt_mbuf[i] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, 0, 0);
+          fg_pkt_mbuf[i] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
           fg_udp_sport[i] = pkt + 34;
           fg_udp_dport[i] = pkt + 36;
           fg_udp_chksum[i] = pkt + 40;
           fg_counter[i] = pkt + 50;
         } else { // IPv6
-          fg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+          fg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, var_sport, var_dport);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
           fg_udp_sport[i] = pkt + 54;
           fg_udp_dport[i] = pkt + 56;
           fg_udp_chksum[i] = pkt + 60;
           fg_counter[i] = pkt + 70;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
         // create backround PDV Frame (always IPv6)
-        bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
+        bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
         bg_udp_sport[i] = pkt + 54;
         bg_udp_dport[i] = pkt  + 56;
         bg_udp_chksum[i] = pkt + 60;
         bg_counter[i] = pkt + 70;
-        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       }
  
       // set the starting values of port numbers, if they are increased or decreased
@@ -424,7 +430,7 @@ int sendPdv(void *par) {
       i=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ) {	// Main cycle for the number of frames to send
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start;
           udp_sport = (uint16_t *)fg_udp_sport[i];
@@ -478,13 +484,15 @@ int sendPdv(void *par) {
           }
           chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
-	*counter = sent_frames;         // set the counter in the frame
-	chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
+        *counter = sent_frames;         // set the counter in the frame
+        chksum += rte_raw_cksum(&sent_frames,8);        // add the checksum of the counter to the accumulated checksum value
+        ipv4_frame = ip_version == 4 && fg_frame;       // precalculated to have it ready when needed
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                    // make one's complement
-        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+        if ( unlikely( ipv4_frame && chksum == 0 ) )    // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
-        *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+        *udp_chksum = (uint16_t) chksum;                // set checksum in the frame
         // finally, when its time is here, send the frame
         while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    // Beware: an "empty" loop, as well as in the next line
         while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );           // send out the frame
@@ -540,7 +548,7 @@ int sendPdv(void *par) {
             fg_udp_chksum[i][j] = pkt + 60;
             fg_counter[i][j] = pkt + 70;
           }
-          fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          fg_udp_chksum_start[i] = *(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
           // create backround Test Frame (always IPv6)
           ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
           bg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, var_sport, var_dport);
@@ -549,7 +557,7 @@ int sendPdv(void *par) {
           bg_udp_dport[i][j] = pkt  + 56;
           bg_udp_chksum[i][j] = pkt + 60;
           bg_counter[i][j] = pkt + 70;
-          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          bg_udp_chksum_start[i] = *(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
         }
       }
  
@@ -579,7 +587,7 @@ int sendPdv(void *par) {
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ 	// Main cycle for the number of frames to send
         int index = uni_dis_net(gen_net); // index of the pre-generated frame 
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start[index];
           udp_sport = (uint16_t *)fg_udp_sport[index][j];
@@ -634,10 +642,12 @@ int sendPdv(void *par) {
           chksum += *udp_dport = htons(dp);     // set destination port add to checksum -- corrected
         }
         *counter = sent_frames;         // set the counter in the frame
-        chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
+        chksum += rte_raw_cksum(&sent_frames,8);        // add the checksum of the counter to the accumulated checksum value
+        ipv4_frame = ip_version == 4 && fg_frame;       // precalculated to have it ready when needed
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                    // make one's complement
-        if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
+        if ( unlikely( ipv4_frame && chksum == 0 ) )    // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -714,7 +724,9 @@ int rsendPdv(void *par) {
 
   unsigned index;       // current state table index for reading a 4-tuple (used when 'responder-ports' is 1 or 2)
   fourTuple ft;         // 4-tuple is read from the state table into this
-  bool fg_frame;        // the current frame belongs to the foreground traffic: will be handled in a stateful way (if it is IPv4)
+  bool fg_frame, ipv4_frame; // when sending IPv4 traffic, background frames are IPv6: their UDP checksum may be 0.
+  uint32_t chksum;      // temporary variable for shecksum calculation
+  uint16_t *chksump;    // pointer to the checksum of the handled frame
 
   if ( !responder_tuples ) {
     // optimized code for using a single 4-tuple taken from the very first preliminary frame (as foreground traffic)
@@ -728,7 +740,7 @@ int rsendPdv(void *par) {
       // but it is updated regarding counter and UDP checksum
       // N size arrays are used to resolve the write after send problem
       int i; // cycle variable for the above mentioned purpose: takes {0..N-1} values
-      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N]; // pointers of message buffers for fg. and bg. PDV Frames
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[N], *pkt_mbuf; // pointers of message buffers for fg. and bg. PDV Frames
       uint8_t *pkt; // working pointer to the current frame (in the message buffer)
       uint8_t *fg_udp_chksum[N], *bg_udp_chksum[N], *fg_counter[N], *bg_counter[N]; 	// pointers to the given fields
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start; 	// starting values (uncomplemented checksums taken from the original frames)
@@ -748,43 +760,42 @@ int rsendPdv(void *par) {
           fg_udp_chksum[i] = pkt + 60;
           fg_counter[i] = pkt + 70;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
         // create backround PDV Frame (always IPv6)
-        bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
+        bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
         bg_udp_chksum[i] = pkt + 60;
         bg_counter[i] = pkt + 70;
-        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       }
   
       // naive sender version: it is simple and fast
       i=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ) {	// Main cycle for the number of frames to send
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           *(uint64_t *)fg_counter[i] = sent_frames;			// set the counter in the frame 
-          chksum = fg_udp_chksum_start + rte_raw_cksum(&sent_frames,8); 	// add the checksum of the counter to the initial checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);	// calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;					// make one's complement
-          if (chksum == 0)						// checksum should not be 0 (0 means, no checksum is used)
-             chksum = 0xffff;
-          *(uint16_t *)fg_udp_chksum[i] = (uint16_t) chksum;		// set checksum in the frame
-          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
-          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[i], 1) ); 	// send foreground frame
-          snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
+          chksum = fg_udp_chksum_start;
+          chksump = (uint16_t *)fg_udp_chksum[i];
+          pkt_mbuf = fg_pkt_mbuf[i];
         } else {
           // background frame is to be sent
           *(uint64_t *)bg_counter[i] = sent_frames;			// set the counter in the frame 
-          chksum = bg_udp_chksum_start + rte_raw_cksum(&sent_frames,8);   // add the checksum of the counter to the initial checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                    // make one's complement
-          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-             chksum = 0xffff;
-          *(uint16_t *)bg_udp_chksum[i] = (uint16_t) chksum;              // set checksum in the frame
-          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate ); 	// Beware: an "empty" loop, as well as in the next line
-          while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[i], 1) ); 	// send background frame
-          snd_ts[sent_frames] = rte_rdtsc();				// store timestamp
+          chksum = bg_udp_chksum_start;
+          chksump = (uint16_t *)bg_udp_chksum[i];
+          pkt_mbuf = bg_pkt_mbuf[i];
         }
+        chksum += rte_raw_cksum(&sent_frames,8);        // add the checksum of the counter to the initial checksum value
+        ipv4_frame = ip_version == 4 && fg_frame;       // precalculated to have it ready when needed
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+        chksum = (~chksum) & 0xffff;                                    // make one's complement
+        if ( unlikely( ipv4_frame && chksum == 0 ) )    // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *chksump = (uint16_t) chksum;                   // set checksum in the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );  // Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );   // send background frame
+        snd_ts[sent_frames] = rte_rdtsc();                            // store timestamp
         i = (i+1) % N;
       } // this is the end of the sending cycle
     } // end of optimized code for single destination network
@@ -796,11 +807,10 @@ int rsendPdv(void *par) {
       // N size arrays are used to resolve the write after send problem
       int j; // cycle variable for the above mentioned purpose: takes {0..N-1} values
       // num_dest_nets <= 256
-      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[256][N]; // pointers of message buffers for fg. and bg. PDV Frames
+      struct rte_mbuf *fg_pkt_mbuf[N], *bg_pkt_mbuf[256][N], *pkt_mbuf; // pointers of message buffers for fg. and bg. PDV Frames
       uint8_t *pkt; // working pointer to the current frame (in the message buffer)
       uint8_t *fg_udp_chksum[N], *bg_udp_chksum[256][N], *fg_counter[N], *bg_counter[256][N];   // pointers to the given fields
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
-      uint32_t chksum; // temporary variable for shecksum calculation
       uint32_t curr_dst_ipv4;     // IPv4 destination address, which will be changed
       in6_addr curr_dst_ipv6;     // foreground IPv6 destination address, which will be changed
       in6_addr curr_dst_bg;       // backround IPv6 destination address, which will be changed
@@ -818,21 +828,21 @@ int rsendPdv(void *par) {
           fg_counter[j] = pkt + 50;
         }
         else { // IPv6 -- stateful operation is not yet supported!
-          fg_pkt_mbuf[j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+          fg_pkt_mbuf[j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0); // garbage
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[j], uint8_t *); // Access the PDV Frame in the message buffer
           fg_udp_chksum[j] = pkt + 60;
           fg_counter[j] = pkt + 70;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[j]; // save the uncomplemented checksum value (same for all values of "j")
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[j]; // save the uncomplemented checksum value (same for all values of "j")
 
         for ( i=0; i<num_dest_nets; i++ ) {
           // create backround Test Frame (always IPv6)
           ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
-          bg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, 0, 0);
+          bg_pkt_mbuf[i][j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, var_sport, var_dport);
           pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i][j], uint8_t *); // Access the PDV Frame in the message buffer
           bg_udp_chksum[i][j] = pkt + 60;
           bg_counter[i][j] = pkt + 70;
-          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          bg_udp_chksum_start[i] = *(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
         }
       }
   
@@ -846,30 +856,30 @@ int rsendPdv(void *par) {
       // naive sender version: it is simple and fast
       j=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ 	// Main cycle for the number of frames to send
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           *(uint64_t *)fg_counter[j] = sent_frames;                        	// set the counter in the frame
-          chksum = fg_udp_chksum_start + rte_raw_cksum(&sent_frames,8);   	// add the checksum of the counter to the initial checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     	// calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                    	// make one's complement
-          if (chksum == 0)                                                	// checksum should not be 0 (0 means, no checksum is used)
-             chksum = 0xffff;
-          *(uint16_t *)fg_udp_chksum[j] = (uint16_t) chksum;               	// set checksum in the frame
-          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    	// Beware: an "empty" loop, as well as in the next line
-          while ( !rte_eth_tx_burst(eth_id, 0, &fg_pkt_mbuf[j], 1) );      	// send foreground frame
-          snd_ts[sent_frames] = rte_rdtsc();                              	// store timestamp
+          chksum = fg_udp_chksum_start;
+          chksump = (uint16_t *)fg_udp_chksum[j];
+          pkt_mbuf = fg_pkt_mbuf[j];
         } else {
+          // background frame is to be sent
           int index = uni_dis_net(gen); // index of the pre-generated frame 
           *(uint64_t *)bg_counter[index][j] = sent_frames;                      // set the counter in the frame
-          chksum = bg_udp_chksum_start[index] + rte_raw_cksum(&sent_frames,8);  // add the checksum of the counter to the initial checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     	// calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                    	// make one's complement
-          if (chksum == 0)                                                	// checksum should not be 0 (0 means, no checksum is used)
-             chksum = 0xffff;
-          *(uint16_t *)bg_udp_chksum[index][j] = (uint16_t) chksum;             // set checksum in the frame
-          while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    	// Beware: an "empty" loop, as well as in the next line
-          while ( !rte_eth_tx_burst(eth_id, 0, &bg_pkt_mbuf[index][j], 1) );    // send foreground frame
-          snd_ts[sent_frames] = rte_rdtsc();                              	// store timestamp
+          chksum = bg_udp_chksum_start[index];
+          chksump = (uint16_t *)bg_udp_chksum[index][j];
+          pkt_mbuf = bg_pkt_mbuf[index][j];
         }
+        chksum += rte_raw_cksum(&sent_frames,8);        // add the checksum of the counter to the initial checksum value
+        ipv4_frame = ip_version == 4 && fg_frame;       // precalculated to have it ready when needed
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+        chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+        chksum = (~chksum) & 0xffff;                                    // make one's complement
+        if ( unlikely( ipv4_frame && chksum == 0 ) )    // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+          chksum = 0xffff;
+        *chksump = (uint16_t) chksum;                   // set checksum in the frame
+        while ( rte_rdtsc() < start_tsc+sent_frames*hz/frame_rate );    // Beware: an "empty" loop, as well as in the next line
+        while ( !rte_eth_tx_burst(eth_id, 0, &pkt_mbuf, 1) );           // send out the frame
+        snd_ts[sent_frames] = rte_rdtsc();                              // store timestamp
         j = (j+1) % N;
       } // this is the end of the sending cycle
     } // end of optimized code for multiple destination networks
@@ -909,7 +919,8 @@ int rsendPdv(void *par) {
       for ( i=0; i<N; i++ ) {
         // create foreground PDV Frame (IPv4 or IPv6)
         if ( ip_version == 4 ) {
-          fg_pkt_mbuf[i] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, 0, 0);
+          // All IPv4 addresses and port numbers are set to 0.
+          fg_pkt_mbuf[i] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
           fg_rte_ipv4_hdr[i] = pkt + 14;
           fg_ipv4_chksum[i] = pkt + 24;
@@ -920,22 +931,22 @@ int rsendPdv(void *par) {
           fg_udp_chksum[i] = pkt + 40;
           fg_counter[i] = pkt + 50;
         } else { // IPv6 -- stateful operation is not yet supported!
-          fg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+          fg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0); // garbage
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
           fg_udp_sport[i] = pkt + 54;
           fg_udp_dport[i] = pkt + 56;
           fg_udp_chksum[i] = pkt + 60;
           fg_counter[i] = pkt + 70;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
         // create backround PDV Frame (always IPv6)
-        bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, 0, 0);
+        bg_pkt_mbuf[i] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the PDV Frame in the message buffer
         bg_udp_sport[i] = pkt + 54;
         bg_udp_dport[i] = pkt  + 56;
         bg_udp_chksum[i] = pkt + 60;
         bg_counter[i] = pkt + 70;
-        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       }
  
       // set the starting values of port numbers, if they are increased or decreased
@@ -961,7 +972,7 @@ int rsendPdv(void *par) {
       i=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ) {	// Main cycle for the number of frames to send
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start;
           udp_sport = (uint16_t *)fg_udp_sport[i];
@@ -973,7 +984,6 @@ int rsendPdv(void *par) {
           ipv4_dst = (uint32_t *)fg_ipv4_dst[i];        // this is rubbish if IP version is 6
           counter = (uint64_t *)fg_counter[i];
           pkt_mbuf = fg_pkt_mbuf[i];
-          fg_frame = 1;
         } else {
           // background frame is to be sent
           chksum = bg_udp_chksum_start;
@@ -982,10 +992,9 @@ int rsendPdv(void *par) {
           udp_chksum = (uint16_t *)bg_udp_chksum[i];
           counter = (uint64_t *)bg_counter[i];
           pkt_mbuf = bg_pkt_mbuf[i];
-          fg_frame = 0;
         }
         // from here, we need to handle the frame identified by the temprary variables
-        if ( ip_version == 4 && fg_frame ) {
+        if ( ipv4_frame = ip_version == 4 && fg_frame ) {
           // this frame is handled in a stateful way
           switch ( responder_tuples ) {                  // here, it is surely not 0
             case 1:
@@ -1012,17 +1021,18 @@ int rsendPdv(void *par) {
           *counter = sent_frames;         // set the counter in the frame
           // calculate checksum....
           chksum += rte_raw_cksum(&ft,12);
-          chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // reduce to 32 bits
+          chksum += rte_raw_cksum(&sent_frames,8);      // add the checksum of the counter to the accumulated checksum value
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
           chksum = (~chksum) & 0xffff;                                  // make one's complement
-          if (chksum == 0)                                              // checksum should not be 0 (0 means, no checksum is used)
+          if ( unlikely( chksum == 0 ) )                // over IPv4, checksum should not be 0 (0 means, no checksum is used)
             chksum = 0xffff;
           *udp_chksum = (uint16_t) chksum;              // set checksum in the frame
           *ipv4_chksum = 0;                             // IPv4 header checksum is set to 0
           *ipv4_chksum = rte_ipv4_cksum(rte_ipv4_hdr_start);        // IPv4 header checksum is set now
           // this is the end of handling the frame in a stateful way
         } else {
-          // this frame is handled in the old way
+          // this frame is handled in the old way (it is not an IPv4 frame!)
           if ( var_sport ) {
             // sport is varying
             switch ( var_sport ) {
@@ -1057,10 +1067,9 @@ int rsendPdv(void *par) {
           }
  	  *counter = sent_frames;         // set the counter in the frame
   	  chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
-          chksum = (~chksum) & 0xffff;                                    // make one's complement
-          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-            chksum = 0xffff;
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+          chksum = (~chksum) & 0xffff;                                  // make one's complement
           *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
           // this is the end of handling the frame in the old way
         }
@@ -1087,7 +1096,6 @@ int rsendPdv(void *par) {
       uint32_t *ipv4_src, *ipv4_dst; // further ones for stateful tests
       uint64_t *counter; // working pointer to the counter in the currently manipulated frame
       uint16_t fg_udp_chksum_start, bg_udp_chksum_start[256];  // starting values (uncomplemented checksums taken from the original frames)
-      uint32_t chksum; // temporary variable for shecksum calculation
       uint16_t sport, dport; // values of source and destination port numbers -- to be preserved, when increase or decrease is done
       uint16_t sp, dp; // values of source and destination port numbers -- temporary values
       uint32_t curr_dst_ipv4;     // IPv4 destination address, which will be changed
@@ -1101,7 +1109,7 @@ int rsendPdv(void *par) {
       for ( j=0; j<N; j++ ) {
         // create foreground PDV Frame (IPv4 or IPv6)
         if ( ip_version == 4 ) {
-          fg_pkt_mbuf[j] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, 0, 0);
+          fg_pkt_mbuf[j] = mkPdvFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ipv4_zero, &ipv4_zero, 1, 1);
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[j], uint8_t *); // Access the PDV Frame in the message buffer
           fg_rte_ipv4_hdr[j] = pkt + 14;
           fg_ipv4_chksum[j] = pkt + 24;
@@ -1112,14 +1120,14 @@ int rsendPdv(void *par) {
           fg_udp_chksum[j] = pkt + 40;
           fg_counter[j] = pkt + 50;
         } else { // IPv6 -- stateful operation is not yet supported!
-          fg_pkt_mbuf[j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
+          fg_pkt_mbuf[j] = mkPdvFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0); // garbage
           pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[j], uint8_t *); // Access the PDV Frame in the message buffer
           fg_udp_sport[j] = pkt + 54;
           fg_udp_dport[j] = pkt + 56;
           fg_udp_chksum[j] = pkt + 60;
           fg_counter[j] = pkt + 70;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[j]; // save the uncomplemented checksum value (same for all values of "j")
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[j]; // save the uncomplemented checksum value (same for all values of "j")
 
         for ( i=0; i<num_dest_nets; i++ ) {
           // create backround Test Frame (always IPv6)
@@ -1130,7 +1138,7 @@ int rsendPdv(void *par) {
           bg_udp_dport[i][j] = pkt  + 56;
           bg_udp_chksum[i][j] = pkt + 60;
           bg_counter[i][j] = pkt + 70;
-          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          bg_udp_chksum_start[i] = *(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
         }
       }
  
@@ -1161,7 +1169,7 @@ int rsendPdv(void *par) {
       j=0; // increase maunally after each sending
       for ( sent_frames = 0; sent_frames < frames_to_send; sent_frames++ ){ 	// Main cycle for the number of frames to send
         // set the temporary variables (including several pointers) to handle the right pre-generated Test Frame
-        if ( sent_frames % n  < m ) {
+        if ( fg_frame = sent_frames % n  < m ) {
           // foreground frame is to be sent
           chksum = fg_udp_chksum_start;
           udp_sport = (uint16_t *)fg_udp_sport[j];
@@ -1173,7 +1181,6 @@ int rsendPdv(void *par) {
           ipv4_dst = (uint32_t *)fg_ipv4_dst[j];        // this is rubbish if IP version is 6
           counter = (uint64_t *)fg_counter[j];
           pkt_mbuf = fg_pkt_mbuf[j];
-          fg_frame = 1;
         } else {
           // background frame is to be sent
           int net_index = uni_dis_net(gen_net); // index of the pre-generated frame
@@ -1183,7 +1190,6 @@ int rsendPdv(void *par) {
           udp_chksum = (uint16_t *)bg_udp_chksum[net_index][j];
           counter = (uint64_t *)bg_counter[net_index][j];
           pkt_mbuf = bg_pkt_mbuf[net_index][j];
-          fg_frame = 0;
         }
         // from here, we need to handle the frame identified by the temprary variables
         if ( ip_version == 4 && fg_frame ) {
@@ -1214,16 +1220,17 @@ int rsendPdv(void *par) {
           // calculate checksum....
           chksum += rte_raw_cksum(&ft,12);
           chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
-          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // reduce to 32 bits
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
           chksum = (~chksum) & 0xffff;                                  // make one's complement
-          if (chksum == 0)                                              // checksum should not be 0 (0 means, no checksum is used)
+          if ( unlikely( chksum == 0 ) )                // over IPv4, checksum should not be 0 (0 means, no checksum is used)
             chksum = 0xffff;
           *udp_chksum = (uint16_t) chksum;              // set checksum in the frame
           *ipv4_chksum = 0;                             // IPv4 header checksum is set to 0
           *ipv4_chksum = rte_ipv4_cksum(rte_ipv4_hdr_start);        // IPv4 header checksum is set now
           // this is the end of handling the frame in a stateful way
         } else {
-          // this frame is handled in the old way
+          // this frame is handled in the old way (it is not an IPv4 frame!)
           if ( var_sport ) {
             // sport is varying
             switch ( var_sport ) {
@@ -1259,9 +1266,8 @@ int rsendPdv(void *par) {
           *counter = sent_frames;         // set the counter in the frame
           chksum += rte_raw_cksum(&sent_frames,8);         // add the checksum of the counter to the accumulated checksum value
           chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+          chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
           chksum = (~chksum) & 0xffff;                                    // make one's complement
-          if (chksum == 0)                                                // checksum should not be 0 (0 means, no checksum is used)
-            chksum = 0xffff;
           *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
           // this is the end of handling the frame in the old way
         }
@@ -1601,8 +1607,8 @@ void Pdv::measure(uint16_t leftport, uint16_t rightport) {
         // then, initialize the parameter class instance
         rSenderParametersPdv rspars(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
                                    ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                              	   fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-				   state_table_size,stateTable,responder_tuples,&right_send_ts);
+                                   rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
+                                   state_table_size,stateTable,responder_tuples,&right_send_ts);
 
         // start right sender
         if (rte_eal_remote_launch(rsendPdv, &rspars, cpu_right_sender) )
