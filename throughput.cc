@@ -1042,7 +1042,8 @@ void check_tsc(int cpu, const char *cpu_name) {
 // Please refer to RFC 2544 Appendix C.2.6.4 "Test Frames" for the values to be set in the test frames.
 
 // creates an IPv4 Test Frame using several helper functions
-// BEHAVIOR: it sets exatly, what it is told to set :-)
+// BEHAVIOR: If both port numbers are nonzero, then it really creates a FINAL test frame, however,
+// if any of the port numbers are zero, it only includes a "raw", uncomplemented checksum to support further processing.
 struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport) {
@@ -1064,13 +1065,25 @@ struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const
   mkUdpHeader(udp_hd, udp_length, sport, dport);			
   int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkData(udp_data, data_legth);
-  udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  if ( sport && dport ) {
+    // The non-zero value of both port numbers means that they have fixed values in the test frame,
+    // therefore, final UDP checksum may be calculated and set.
+    udp_hd->dgram_cksum = rte_ipv4_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  }
+  else {
+    // At least one of the port numbers will change, thus UDP checksum will need to be manipulated later.
+    uint32_t cksum = rte_raw_cksum(udp_hd, udp_length);
+    cksum += rte_ipv4_phdr_cksum(ip_hdr, 0);
+    cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);
+    cksum = ((cksum & 0xffff0000) >> 16) + (cksum & 0xffff);    // twice must be enough
+    udp_hd->dgram_cksum = (uint16_t)cksum;      // The uncomplemented UDP checksum is stored (for further processing).
+  }
   ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);	// IPv4 header checksum is set now
   return pkt_mbuf;
 }
 
 // creates an IPv4 Test Frame using mkFinalTestFrame4
-// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+// BEHAVIOR: if var_xport is 0, xport is set according to RFC 2544 Test Frame format, otherwise xport is set to 0, to be set later.
 struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
@@ -1080,6 +1093,31 @@ struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char
   return pkt_mbuf;
 }
 
+// creates an IPv4 Test Frame using mkFinalTestFrame4, but it should NOT be final in any case, because of varying IP address(es)
+// to that end, it calls mkFinalTestFrame4 with sport=0 and dport=0, but after that it makes corrections as follows:
+// if var_xport is 0, xport is set according to RFC 2544 Test Frame format, otherwise xport remains 0, to be set later.
+// UDP checksum is updated if any of the port numbers were changed, but it remains uncomplemented to support further operations
+struct rte_mbuf *mkVaripTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                                   const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                                   const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
+  struct rte_mbuf *pkt_mbuf=mkFinalTestFrame4(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,0,0);
+  // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
+  uint8_t* pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); // Access the Test Frame in the message buffer
+  uint16_t *udp_sport = (uint16_t *) (pkt + 34);
+  uint16_t *udp_dport = (uint16_t *) (pkt + 36);
+  uint16_t *udp_chksum = (uint16_t *) (pkt + 40);
+  uint32_t chksum = *udp_chksum;
+  if ( !var_sport )
+    chksum += *udp_sport = htons(0xC020);       // set source port and add to checksum
+  if ( !var_dport )
+    chksum += *udp_dport = htons(0x0007);       // set source port and add to checksum
+  if ( !var_sport || !var_dport ) {
+    chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+    chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+    *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+  }
+  return pkt_mbuf;
+}
 
 // creates an Ethernet header
 void mkEthHeader(struct rte_ether_hdr *eth, const struct ether_addr *dst_mac, const struct ether_addr *src_mac, const uint16_t ether_type) {
@@ -1124,7 +1162,8 @@ void mkData(uint8_t *data, uint16_t length) {
 }
 
 // creates an IPv6 Test Frame using several helper functions
-// BEHAVIOR: it sets exatly, what it is told to set :-)
+// BEHAVIOR: If both port numbers are nonzero, then it really creates a FINAL test frame, however,
+// if any of the port numbers are zero, it only includes a "raw", uncomplemented checksum to support further processing.
 struct rte_mbuf *mkFinalTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned sport, unsigned dport) {
@@ -1146,12 +1185,22 @@ struct rte_mbuf *mkFinalTestFrame6(uint16_t length, rte_mempool *pkt_pool, const
   mkUdpHeader(udp_hd, udp_length, sport, dport);
   int data_legth = udp_length - sizeof(rte_udp_hdr);
   mkData(udp_data, data_legth);
-  udp_hd->dgram_cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated and set
+  uint16_t cksum = rte_ipv6_udptcp_cksum( ip_hdr, udp_hd ); // UDP checksum is calculated
+  if ( sport && dport ) {
+    // The non-zero value of both port numbers means that they have fixed values in the test frame,
+    // therefore, final UDP checksum may be set.
+    udp_hd->dgram_cksum = cksum;        // The final UDP checksum is set.
+  }
+  else {
+    // At least one of the port numbers will change, thus UDP checksum will need to be manipulated later.
+    udp_hd->dgram_cksum = ~cksum;      // The uncomplemented UDP checksum is stored (for further processing).
+  }
+
   return pkt_mbuf;
 }
 
 // creates an IPv6 Test Frame using mkFinalTestFrame6
-// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+// BEHAVIOR: if var_xport is 0, xport is set according to RFC 2544 Test Frame format, otherwise xport is set to 0, to be set later.
 struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
@@ -1161,6 +1210,32 @@ struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char
   return pkt_mbuf;
 }
 
+// creates an IPv6 Test Frame using mkFinalTestFrame6, but it should NOT be final in any case, because of varying IP address(es)
+// to that end, it calls mkFinalTestFrame6 with sport=0 and dport=0, but after that it makes corrections as follows:
+// if var_xport is 0, xport is set according to RFC 2544 Test Frame format, otherwise xport remains 0, to be set later.
+// UDP checksum is updated if any of the port numbers were changed, but it remains uncomplemented to support further operations
+struct rte_mbuf *mkVaripTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                                   const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                                   const struct in6_addr *src_ip, const struct in6_addr *dst_ip,
+                                   unsigned var_sport, unsigned var_dport) {
+  struct rte_mbuf *pkt_mbuf=mkFinalTestFrame6(length,pkt_pool,side,dst_mac,src_mac,src_ip,dst_ip,0,0);
+  // The above function terminated the Tester if it could not allocate memory, thus no error handling is needed here. :-)
+  uint8_t* pkt = rte_pktmbuf_mtod(pkt_mbuf, uint8_t *); // Access the Test Frame in the message buffer
+  uint16_t *udp_sport = (uint16_t *) (pkt + 54);
+  uint16_t *udp_dport = (uint16_t *) (pkt + 56);
+  uint16_t *udp_chksum = (uint16_t *) (pkt + 60);
+  uint32_t chksum = *udp_chksum;
+  if ( !var_sport )
+    chksum += *udp_sport = htons(0xC020);       // set source port and add to checksum
+  if ( !var_dport )
+    chksum += *udp_dport = htons(0x0007);       // set source port and add to checksum
+  if ( !var_sport || !var_dport ) {
+    chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
+    chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
+    *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
+  }
+  return pkt_mbuf;
+}
 
 // creates an IPv6 header
 void mkIpv6Header(struct rte_ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip) {
@@ -1319,14 +1394,14 @@ int send(void *par) {
           fg_udp_dport[i] = pkt + 56;
           fg_udp_chksum[i] = pkt + 60;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
         // create backround Test Frame (always IPv6)
         bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
         bg_udp_sport[i] = pkt + 54;
         bg_udp_dport[i] = pkt  + 56;
         bg_udp_chksum[i] = pkt + 60;
-        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       } 
 
       // set the starting values of port numbers, if they are increased or decreased
@@ -1403,7 +1478,7 @@ int send(void *par) {
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                  	// make one's complement
-        if ( ipv4_frame && chksum == 0 )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+        if ( unlikely( ipv4_frame && chksum == 0 ) )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -1457,7 +1532,7 @@ int send(void *par) {
             fg_udp_dport[i][j] = pkt + 56;
             fg_udp_chksum[i][j] = pkt + 60;
           }
-          fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          fg_udp_chksum_start[i] = *(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
           // create backround Test Frame (always IPv6)
           ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
           bg_pkt_mbuf[i][j] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, var_sport, var_dport);
@@ -1465,7 +1540,7 @@ int send(void *par) {
           bg_udp_sport[i][j] = pkt + 54;
           bg_udp_dport[i][j] = pkt  + 56;
           bg_udp_chksum[i][j] = pkt + 60;
-          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          bg_udp_chksum_start[i] = *(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
         }
       }
 
@@ -1546,7 +1621,7 @@ int send(void *par) {
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                    // make one's complement
-        if ( ipv4_frame && chksum == 0 )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+        if ( unlikely( ipv4_frame && chksum == 0 ) )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -1653,7 +1728,7 @@ int msend(void *par) {
     for ( i=0; i<N; i++ ) {
       // create foreground Test Frame
       if ( ip_version == 4 ) {
-        fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport);
+        fg_pkt_mbuf[i] = mkVaripTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
         fg_src_ip[i] = pkt + 26 + src_ipv4_offset;  // 14+12: source IPv4 address, the 16-bits to be modified
         fg_dst_ip[i] = pkt + 30 + dst_ipv4_offset;  // 14+16: destination IPv4 address, the 16-bits to be modified
@@ -1668,14 +1743,14 @@ int msend(void *par) {
       }
       if ( ip_version == 4 )
         fg_ipv4_chksum_start = ~*(uint16_t *)fg_ipv4_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
-      fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+      fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
       // create backround Test Frame (always IPv6)
-      bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
+      bg_pkt_mbuf[i] = mkVaripTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
       pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
       bg_src_ip[i] = pkt + 22 + src_ipv6_offset;  // 14+8:  source IPv6 address, the 16-bits to be modified
       bg_dst_ip[i] = pkt + 38 + dst_ipv6_offset;  // 14+24: destination IPv6 address, the 16-bits to be modified
       bg_udp_chksum[i] = pkt + 60;   // 14+40+6: UDP checksum
-      bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+      bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
     } 
 
     // set the starting values of the changing 16-bit fields of IP addresses, if they are increased or decreased
@@ -1764,7 +1839,7 @@ int msend(void *par) {
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
       chksum = (~chksum) & 0xffff;                                  	// make one's complement
-      if ( ipv4_frame && chksum == 0)  // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+      if ( unlikely( ipv4_frame && chksum == 0 ) )  // over IPv4, checksum should not be 0 (0 means, no checksum is used)
         chksum = 0xffff;
       *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
       // finally, when its time is here, send the frame
@@ -1820,7 +1895,7 @@ int msend(void *par) {
       }
       if ( ip_version == 4 )
         fg_ipv4_chksum_start = ~*(uint16_t *)fg_ipv4_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
-      fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+      fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
       // create backround Test Frame (always IPv6)
       bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
       pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
@@ -1829,7 +1904,7 @@ int msend(void *par) {
       bg_udp_sport[i] = pkt + 54;    // 14+40+0: source UDP port
       bg_udp_dport[i] = pkt + 56;    // 14+40+2: destination UDP port
       bg_udp_chksum[i] = pkt + 60;   // 14+40+6: UDP checksum
-      bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+      bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
     } 
 
     // set the starting values of the changing 16-bit fields of IP addresses, if they are increased or decreased
@@ -1968,7 +2043,7 @@ int msend(void *par) {
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
       chksum = (~chksum) & 0xffff;                                  	// make one's complement
-      if ( ipv4_frame && chksum == 0)  // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+      if ( unlikely( ipv4_frame && chksum == 0 ) )  // over IPv4, checksum should not be 0 (0 means, no checksum is used)
         chksum = 0xffff;
       *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
       // finally, when its time is here, send the frame
@@ -2143,14 +2218,14 @@ int isend(void *par) {
           fg_udp_dport[i] = pkt + 56;
           fg_udp_chksum[i] = pkt + 60;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
         // create backround Test Frame (always IPv6)
         bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
         bg_udp_sport[i] = pkt + 54;
         bg_udp_dport[i] = pkt  + 56;
         bg_udp_chksum[i] = pkt + 60;
-        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       } 
 
       // prepare for the different kinds of port number enumarations
@@ -2280,7 +2355,7 @@ int isend(void *par) {
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                  	// make one's complement
-        if ( ipv4_frame && chksum == 0 )        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+        if ( unlikely( ipv4_frame && chksum == 0 ) )          // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -2334,7 +2409,7 @@ int isend(void *par) {
             fg_udp_dport[i][j] = pkt + 56;
             fg_udp_chksum[i][j] = pkt + 60;
           }
-          fg_udp_chksum_start[i] = ~*(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          fg_udp_chksum_start[i] = *(uint16_t *)fg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
           // create backround Test Frame (always IPv6)
           ((uint8_t *)&curr_dst_bg)[7] = (uint8_t) i; // see comment above
           bg_pkt_mbuf[i][j] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, &curr_dst_bg, var_sport, var_dport);
@@ -2342,7 +2417,7 @@ int isend(void *par) {
           bg_udp_sport[i][j] = pkt + 54;
           bg_udp_dport[i][j] = pkt  + 56;
           bg_udp_chksum[i][j] = pkt + 60;
-          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          bg_udp_chksum_start[i] = *(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
         }
       }
 
@@ -2423,7 +2498,7 @@ int isend(void *par) {
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // calculate 16-bit one's complement sum
         chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);     // twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
         chksum = (~chksum) & 0xffff;                                    // make one's complement
-        if ( ipv4_frame && chksum == 0)        // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+        if ( unlikely( ipv4_frame && chksum == 0 ) )          // over IPv4, checksum should not be 0 (0 means, no checksum is used)
           chksum = 0xffff;
         *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
         // finally, when its time is here, send the frame
@@ -2545,29 +2620,29 @@ int imsend(void *par) {
     for ( i=0; i<N; i++ ) {
       // create foreground Test Frame
       if ( ip_version == 4 ) {
-        fg_pkt_mbuf[i] = mkTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport);
+        fg_pkt_mbuf[i] = mkVaripTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv4, dst_ipv4, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
         fg_src_ip[i] = pkt + 26 + src_ipv4_offset;  // 14+12: source IPv4 address, the 16-bits to be modified
         fg_dst_ip[i] = pkt + 30 + dst_ipv4_offset;  // 14+16: destination IPv4 address, the 16-bits to be modified
         fg_ipv4_chksum[i] = pkt + 24;               // 14+10: IPv4 header checksum
         fg_udp_chksum[i] = pkt + 40;   // 14+20+6: UDP checksum 
       } else { // IPv6
-        fg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, var_sport, var_dport);
+        fg_pkt_mbuf[i] = mkVaripTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(fg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
         fg_src_ip[i] = pkt + 22 + src_ipv6_offset;  // 14+8:  source IPv6 address, the 16-bits to be modified
         fg_dst_ip[i] = pkt + 38 + dst_ipv6_offset;  // 14+24: destination IPv6 address, the 16-bits to be modified
         fg_udp_chksum[i] = pkt + 60;   // 14+40+6: UDP checksum
       }
       if ( ip_version == 4 )
-        fg_ipv4_chksum_start = ~*(uint16_t *)fg_ipv4_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
-      fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+        fg_ipv4_chksum_start = *(uint16_t *)fg_ipv4_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+      fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
       // create backround Test Frame (always IPv6)
       bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
       pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
       bg_src_ip[i] = pkt + 22 + src_ipv6_offset;  // 14+8:  source IPv6 address, the 16-bits to be modified
       bg_dst_ip[i] = pkt + 38 + dst_ipv6_offset;  // 14+24: destination IPv6 address, the 16-bits to be modified
       bg_udp_chksum[i] = pkt + 60;   // 14+40+6: UDP checksum
-      bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+      bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
     } 
 
       // prepare for the different kinds of IP address enumarations
@@ -2710,7 +2785,7 @@ int imsend(void *par) {
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
       chksum = (~chksum) & 0xffff;                                  	// make one's complement
-      if ( ipv4_frame && chksum == 0 )          // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+      if ( unlikely( ipv4_frame && chksum == 0 ) )            // over IPv4, checksum should not be 0 (0 means, no checksum is used)
         chksum = 0xffff;
       *udp_chksum = (uint16_t) chksum;          // set checksum in the frame
       // finally, when its time is here, send the frame
@@ -2768,7 +2843,7 @@ int imsend(void *par) {
       }
       if ( ip_version == 4 )
         fg_ipv4_chksum_start = ~*(uint16_t *)fg_ipv4_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
-      fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+      fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
       // create backround Test Frame (always IPv6)
       bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
       pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
@@ -2777,7 +2852,7 @@ int imsend(void *par) {
       bg_udp_sport[i] = pkt + 54;    // 14+40+0: source UDP port
       bg_udp_dport[i] = pkt + 56;    // 14+40+2: destination UDP port
       bg_udp_chksum[i] = pkt + 60;   // 14+40+6: UDP checksum
-      bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+      bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
     } 
 
     // prepare for the different kinds of IP address enumarations
@@ -2989,7 +3064,7 @@ int imsend(void *par) {
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// calculate 16-bit one's complement sum
       chksum = ((chksum & 0xffff0000) >> 16) + (chksum & 0xffff);   	// twice is enough: 2*0xffff=0x1fffe, 0x1+x0fffe=0xffff
       chksum = (~chksum) & 0xffff;                                  	// make one's complement
-      if ( ipv4_frame && chksum == 0)          // over IPv4, checksum should not be 0 (0 means, no checksum is used)
+      if ( unlikely( ipv4_frame && chksum == 0 ) )            // over IPv4, checksum should not be 0 (0 means, no checksum is used)
         chksum = 0xffff;
       *udp_chksum = (uint16_t) chksum;            // set checksum in the frame
       // finally, when its time is here, send the frame
@@ -3076,7 +3151,7 @@ int rsend(void *par) {
       struct rte_mbuf *fg_pkt_mbuf, *bg_pkt_mbuf; // message buffers for fg. and bg. Test Frames
       // create foreground Test Frame
       if ( ip_version == 4 )
-        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port);
+        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ntohs(ft.resp_port), ntohs(ft.init_port));
       else  // IPv6 -- stateful operation is not yet supported!
         fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
   
@@ -3105,7 +3180,7 @@ int rsend(void *par) {
   
       // create foreground Test Frame
       if ( ip_version == 4 ) {
-        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ft.resp_port, ft.init_port);
+        fg_pkt_mbuf = mkFinalTestFrame4(ipv4_frame_size, pkt_pool, side, dst_mac, src_mac, &ft.resp_addr, &ft.init_addr, ntohs(ft.resp_port), ntohs(ft.init_port));
       }
       else { // IPv6 -- stateful operation is not yet supported!
         fg_pkt_mbuf = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_ipv6, dst_ipv6, 0, 0);
@@ -3185,14 +3260,14 @@ int rsend(void *par) {
           fg_udp_dport[i] = pkt + 56;
           fg_udp_chksum[i] = pkt + 60;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i") 
         // create backround Test Frame (always IPv6)
         bg_pkt_mbuf[i] = mkTestFrame6(ipv6_frame_size, pkt_pool, side, dst_mac, src_mac, src_bg, dst_bg, var_sport, var_dport);
         pkt = rte_pktmbuf_mtod(bg_pkt_mbuf[i], uint8_t *); // Access the Test Frame in the message buffer
         bg_udp_sport[i] = pkt + 54;
         bg_udp_dport[i] = pkt  + 56;
         bg_udp_chksum[i] = pkt + 60;
-        bg_udp_chksum_start = ~*(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
+        bg_udp_chksum_start = *(uint16_t *)bg_udp_chksum[i]; // save the uncomplemented checksum value (same for all values of "i")
       } 
 
       // set the starting values of port numbers, if they are increased or decreased
@@ -3367,7 +3442,7 @@ int rsend(void *par) {
           fg_udp_dport[j] = pkt + 56;
           fg_udp_chksum[j] = pkt + 60;
         }
-        fg_udp_chksum_start = ~*(uint16_t *)fg_udp_chksum[j]; // save the uncomplemented checksum value (same for all values of "j")
+        fg_udp_chksum_start = *(uint16_t *)fg_udp_chksum[j]; // save the uncomplemented checksum value (same for all values of "j")
 
         // create backround Test Frames for all destination networks (always IPv6)
         for ( i=0; i<num_dest_nets; i++ ) {
@@ -3377,7 +3452,7 @@ int rsend(void *par) {
           bg_udp_sport[i][j] = pkt + 54;
           bg_udp_dport[i][j] = pkt  + 56;
           bg_udp_chksum[i][j] = pkt + 60;
-          bg_udp_chksum_start[i] = ~*(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
+          bg_udp_chksum_start[i] = *(uint16_t *)bg_udp_chksum[i][j]; // save the uncomplemented checksum value (same for all values of "j")
         }
       }
 

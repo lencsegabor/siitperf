@@ -221,6 +221,9 @@ public:
 struct rte_mbuf *mkTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport);
+struct rte_mbuf *mkVaripTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                              const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                              const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport);
 struct rte_mbuf *mkFinalTestFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                                    const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                                    const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport);
@@ -229,6 +232,9 @@ void mkIpv4Header(struct rte_ipv4_hdr *ip, uint16_t length, const uint32_t *src_
 void mkUdpHeader(struct rte_udp_hdr *udp, uint16_t length, unsigned var_sport, unsigned var_dport); 
 void mkData(uint8_t *data, uint16_t length);
 struct rte_mbuf *mkTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
+                                const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
+                                const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport);
+struct rte_mbuf *mkVaripTestFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                                 const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                                 const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport);
 void mkIpv6Header(struct rte_ipv6_hdr *ip, uint16_t length, const struct in6_addr *src_ip, const struct in6_addr *dst_ip);

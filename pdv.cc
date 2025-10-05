@@ -62,7 +62,8 @@ int Pdv::senderPoolSize(int num_dest_nets, int varport, int ip_varies) {
 }
 
 // creates a special IPv4 Test Frame for PDV measurement using several helper functions
-// BEHAVIOR: it sets exatly, what it is told to set :-)
+// BEHAVIOR: It never creates a "final" PDV frame becasue PDV frames must always be modified by inserting a 64-bit counter.
+// Therefore, it only includes a "raw", uncomplemented checksum to support further processing.
 struct rte_mbuf *mkFinalPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const uint32_t *src_ip, const uint32_t *dst_ip, unsigned sport, unsigned dport) {
@@ -94,7 +95,7 @@ struct rte_mbuf *mkFinalPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const 
 }
 
 // creates a special IPv4 Test Frame for PDV measurement using mkFinalPdvFrame4
-// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+// BEHAVIOR: if var_xport is 0, xport is set according to RFC 2544 Test Frame format, otherwise xport is set to 0, to be set later.
 struct rte_mbuf *mkPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const uint32_t *src_ip, const uint32_t *dst_ip, unsigned var_sport, unsigned var_dport) {
@@ -105,7 +106,8 @@ struct rte_mbuf *mkPdvFrame4(uint16_t length, rte_mempool *pkt_pool, const char 
 }
 
 // creates a special IPv6 Test Frame for PDV measurement using several helper functions
-// BEHAVIOR: it sets exatly, what it is told to set :-)
+// BEHAVIOR: It never creates a "final" PDV frame becasue PDV frames must always be modified by inserting a 64-bit counter.
+// Therefore, it only includes a "raw", uncomplemented checksum to support further processing.
 struct rte_mbuf *mkFinalPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned sport, unsigned dport) {
@@ -133,7 +135,7 @@ struct rte_mbuf *mkFinalPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const 
 }
 
 // creates a special IPv6 Test Frame for PDV measurement using mkFinalPdvFrame6
-// BEHAVIOR: if port number is 0, it is set according to RFC 2544 Test Frame format, otherwise it is set to 0, to be set later.
+// BEHAVIOR: if var_xport is 0, xport is set according to RFC 2544 Test Frame format, otherwise xport is set to 0, to be set later.
 struct rte_mbuf *mkPdvFrame6(uint16_t length, rte_mempool *pkt_pool, const char *side,
                               const struct ether_addr *dst_mac, const struct ether_addr *src_mac,
                               const struct in6_addr *src_ip, const struct in6_addr *dst_ip, unsigned var_sport, unsigned var_dport) {
