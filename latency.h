@@ -59,6 +59,7 @@ public:
   uint16_t delay; 
   uint16_t num_timestamps;
 
+  senderCommonParametersLatency();
   senderCommonParametersLatency(uint16_t ipv6_frame_size_, uint16_t ipv4_frame_size_, uint32_t frame_rate_, uint16_t duration_,
                                 uint32_t n_, uint32_t m_, uint64_t hz_, uint64_t start_tsc_,
                                 uint16_t delay_, uint16_t num_timestamps_);
@@ -67,6 +68,7 @@ public:
 class senderParametersLatency : public senderParameters {
 public:
   uint64_t *send_ts;
+  senderParametersLatency();
   senderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                           struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                           struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
@@ -74,6 +76,7 @@ public:
                           uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_, uint64_t *send_ts_);
 };
 
+/* It is not used
 class iSenderParametersLatency : public iSenderParameters {
 public:
   uint64_t *send_ts;
@@ -85,11 +88,13 @@ public:
                    uint16_t sport_min_, uint16_t sport_max_, uint16_t dport_min_, uint16_t dport_max_,
                    unsigned enumerate_ports_, uint32_t pre_frames_, uint64_t *send_ts_);
 };
+*/
 
 class rSenderParametersLatency : public rSenderParameters {
 public:
   uint64_t *send_ts;
 
+  rSenderParametersLatency();
   rSenderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                    struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
                    struct in6_addr *src_ipv6_, struct in6_addr *dst_ipv6_, struct in6_addr *src_bg_, struct in6_addr *dst_bg_,
@@ -103,6 +108,7 @@ public:
   uint16_t num_timestamps;
   uint64_t *receive_ts;	// pointer to receive timestamps 
 
+  receiverParametersLatency();
   receiverParametersLatency(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, uint16_t num_timestamps_, uint64_t *receive_ts_);
 };
 
@@ -111,6 +117,7 @@ public:
   uint16_t num_timestamps;
   uint64_t *receive_ts; // pointer to receive timestamps
 
+  rReceiverParametersLatency();
   rReceiverParametersLatency(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, unsigned state_table_size_,
                              unsigned *valid_entries_, atomicFourTuple **stateTable_, uint16_t num_timestamps_, uint64_t *receive_ts_);
 };

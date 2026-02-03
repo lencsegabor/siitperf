@@ -1623,6 +1623,18 @@ int rreceiveLatency(void *par) {
 void Latency::measure(uint16_t leftport, uint16_t rightport) {
   uint64_t *left_send_ts, *right_send_ts, *left_receive_ts, *right_receive_ts; // pointers for timestamp arrays
 
+  // Several parameters are provided to the various sender functions (sendLatency, rsendLatency, isend)
+  // and receiver functions (receiveLatency, rreceiveLatency, rreceive) in the following 'struct'-s.
+  // They are declared here so that they will not be overwritten in the stack when the program leaves an 'if' block.
+  senderCommonParameters scp;			// used by isend() through ispars in phase 1 of the stateful test
+  senderCommonParametersLatency scpL;		// common parameters for left and right senders of type sendLatency()
+  senderParametersLatency sparsL1, sparsL2;	// parameters for left and right senders of type sendLatency()
+  iSenderParameters ispars;			// used by isend() in phase 1 of the stateful test
+  receiverParametersLatency rparsL1, rparsL2;	// parameters for left and right receivers of type receiveLatency()
+  rReceiverParameters rrpars;			// used by rreceive() in phase 1 of the stateful test
+  rReceiverParametersLatency rrparsL;		// used by rreceiveLatency in phase 2 of the stateful test
+  rSenderParametersLatency rsparsL;		// used by rsendLatency() in phase 2 of the stateful test
+
   // create the dynamic arrays for timestamps depending on which directions are active.
   if ( forward ) {      // Left to right direction is active
     // create dynamic arrays for timestamps
@@ -1647,7 +1659,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
     case 0:     // stateless test is to be performed
       {
       // set common parameters for senders
-      senderCommonParametersLatency scp(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc,delay,num_timestamps);
+      scpL=senderCommonParametersLatency(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc,delay,num_timestamps);
     
       if ( forward ) {      // Left to right direction is active
         // set individual parameters for the left sender
@@ -1657,19 +1669,19 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
                    &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
     
         // then, initialize the parameter class instance
-        senderParametersLatency spars(&scp,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                                      ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-    				  fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,left_send_ts);
+        sparsL1=senderParametersLatency(&scpL,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                        ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+    				        fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,left_send_ts);
     
         // start left sender
-        if ( rte_eal_remote_launch(sendLatency, &spars, cpu_left_sender) )
+        if ( rte_eal_remote_launch(sendLatency, &sparsL1, cpu_left_sender) )
           std::cout << "Error: could not start Left Sender." << std::endl;
     
         // set parameters for the right receiver
-        receiverParametersLatency rpars(finish_receiving,rightport,"Forward",num_timestamps,right_receive_ts);
+        rparsL1=receiverParametersLatency(finish_receiving,rightport,"Forward",num_timestamps,right_receive_ts);
     
         // start right receiver
-        if ( rte_eal_remote_launch(receiveLatency, &rpars, cpu_right_receiver) )
+        if ( rte_eal_remote_launch(receiveLatency, &rparsL1, cpu_right_receiver) )
           std::cout << "Error: could not start Right Receiver." << std::endl;
       }
     
@@ -1680,19 +1692,19 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
                    &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
     
         // then, initialize the parameter class instance
-        senderParametersLatency spars(&scp,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                               ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-    			   rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,right_send_ts);
+        sparsL2=senderParametersLatency(&scpL,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                        ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+    			                rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,right_send_ts);
     
         // start right sender
-        if (rte_eal_remote_launch(sendLatency, &spars, cpu_right_sender) )
+        if (rte_eal_remote_launch(sendLatency, &sparsL2, cpu_right_sender) )
           std::cout << "Error: could not start Right Sender." << std::endl;
     
         // set parameters for the left receiver
-        receiverParametersLatency rpars(finish_receiving,leftport,"Reverse",num_timestamps,left_receive_ts);
+        rparsL2=receiverParametersLatency(finish_receiving,leftport,"Reverse",num_timestamps,left_receive_ts);
     
         // start left receiver
-        if ( rte_eal_remote_launch(receiveLatency, &rpars, cpu_left_receiver) )
+        if ( rte_eal_remote_launch(receiveLatency, &rparsL2, cpu_left_receiver) )
           std::cout << "Error: could not start Left Receiver." << std::endl;
       }
     
@@ -1714,7 +1726,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
       {
       // as no timestamps are needed in the preliminary phase, we reuse the code of the Throughput::measure() function
       // set "common" parameters (currently not common with anyone, only code is reused; it will be common, when sending test frames)
-      senderCommonParameters scp1(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
+      scp=senderCommonParameters(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
   
       // set "individual" parameters for the sender of the Initiator residing on the left side
   
@@ -1723,20 +1735,20 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
                  &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
   
       // then, initialize the parameter class instance for premiminary phase
-      iSenderParameters ispars1(&scp1,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                                ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-                                fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-                                enumerate_ports,pre_frames,uniquePortComb);
+      ispars=iSenderParameters(&scp,ip_left_version,pkt_pool_left_sender,leftport,"Preliminary",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                               ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                               fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
+                               enumerate_ports,pre_frames,uniquePortComb);
   
       // start left sender
-      if ( rte_eal_remote_launch(isend, &ispars1, cpu_left_sender) )
+      if ( rte_eal_remote_launch(isend, &ispars, cpu_left_sender) )
         std::cout << "Error: could not start Initiator's Sender." << std::endl;
   
       // set parameters for the right receiver
-      rReceiverParameters rrpars1(finish_receiving_pre,rightport,"Preliminary",state_table_size,&valid_entries,&stateTable);
+      rrpars=rReceiverParameters(finish_receiving_pre,rightport,"Preliminary",state_table_size,&valid_entries,&stateTable);
   
       // start right receiver
-      if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_right_receiver) )
+      if ( rte_eal_remote_launch(rreceive, &rrpars, cpu_right_receiver) )
         std::cout << "Error: could not start Responder's Receiver." << std::endl;
   
       std::cout << "Info: Preliminary frame sending started." << std::endl;
@@ -1757,26 +1769,26 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
       // Now the real test may follow.
   
       // set common parameters for senders
-      senderCommonParametersLatency scp2(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc,delay,num_timestamps);
+      scpL=senderCommonParametersLatency(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc,delay,num_timestamps);
   
       if ( forward ) {      // Left to right direction is active
 
         // set individual parameters for the (normal stateless) left sender
   
         // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
-        senderParametersLatency spars2(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                                       ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-                                       fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,left_send_ts);
+        sparsL1=senderParametersLatency(&scpL,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                        ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                                        fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,left_send_ts);
   
         // start left sender
-        if ( rte_eal_remote_launch(sendLatency, &spars2, cpu_left_sender) )
+        if ( rte_eal_remote_launch(sendLatency, &sparsL1, cpu_left_sender) )
           std::cout << "Error: could not start Left Sender." << std::endl;
   
         // set parameters for the right receiver
-        rReceiverParametersLatency rrpars2(finish_receiving,rightport,"Forward",state_table_size,&valid_entries,&stateTable,num_timestamps,right_receive_ts);
+        rrparsL=rReceiverParametersLatency(finish_receiving,rightport,"Forward",state_table_size,&valid_entries,&stateTable,num_timestamps,right_receive_ts);
   
         // start right receiver
-        if ( rte_eal_remote_launch(rreceiveLatency, &rrpars2, cpu_right_receiver) )
+        if ( rte_eal_remote_launch(rreceiveLatency, &rrparsL, cpu_right_receiver) )
           std::cout << "Error: could not start Responder's Receiver." << std::endl;
       }
 
@@ -1789,20 +1801,20 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
                    &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
   
         // then, initialize the parameter class instance
-        rSenderParametersLatency spars2(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                                        ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                                        rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
-					state_table_size,stateTable,responder_tuples,right_send_ts);
+        rsparsL=rSenderParametersLatency(&scpL,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                         ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                                         rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
+					 state_table_size,stateTable,responder_tuples,right_send_ts);
   
         // start right sender
-        if (rte_eal_remote_launch(rsendLatency, &spars2, cpu_right_sender) )
+        if (rte_eal_remote_launch(rsendLatency, &rsparsL, cpu_right_sender) )
           std::cout << "Error: could not start Responder's Sender." << std::endl;
   
         // set parameters for the left receiver
-        receiverParametersLatency rpars2(finish_receiving,leftport,"Reverse",num_timestamps,left_receive_ts);
+        rparsL2=receiverParametersLatency(finish_receiving,leftport,"Reverse",num_timestamps,left_receive_ts);
   
         // start left receiver
-        if ( rte_eal_remote_launch(receiveLatency, &rpars2, cpu_left_receiver) )
+        if ( rte_eal_remote_launch(receiveLatency, &rparsL2, cpu_left_receiver) )
           std::cout << "Error: could not start Left Receiver." << std::endl;
       }
   
@@ -1824,7 +1836,7 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
       {
       // as no timestamps are needed in the preliminary phase, we reuse the code of the Throughput::measure() function
       // set "common" parameters (currently not common with anyone, only code is reused; it will be common, when sending test frames)
-      senderCommonParameters scp1(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
+      scp=senderCommonParameters(ipv6_frame_size,ipv4_frame_size,pre_rate,0,n,m,hz,start_tsc_pre); // 0: duration in seconds is not applicable
   
       // set "individual" parameters for the sender of the Initiator residing on the right side
   
@@ -1833,20 +1845,20 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
                  &ipv6_right_real,&ipv6_left_real,&ipv6_right_virtual,&ipv6_left_virtual);
   
       // then, initialize the parameter class instance for premiminary phase
-      iSenderParameters ispars1(&scp1,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                                ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                                fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
-                                enumerate_ports,pre_frames,uniquePortComb);
+      ispars=iSenderParameters(&scp,ip_right_version,pkt_pool_right_sender,rightport,"Preliminary",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                               ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                               fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,
+                               enumerate_ports,pre_frames,uniquePortComb);
   
       // start right sender
-      if ( rte_eal_remote_launch(isend, &ispars1, cpu_right_sender) )
+      if ( rte_eal_remote_launch(isend, &ispars, cpu_right_sender) )
         std::cout << "Error: could not start Initiator's Sender." << std::endl;
   
       // set parameters for the left receiver
-      rReceiverParameters rrpars1(finish_receiving_pre,leftport,"Preliminary",state_table_size,&valid_entries,&stateTable);
+      rrpars=rReceiverParameters(finish_receiving_pre,leftport,"Preliminary",state_table_size,&valid_entries,&stateTable);
   
       // start left receiver
-      if ( rte_eal_remote_launch(rreceive, &rrpars1, cpu_left_receiver) )
+      if ( rte_eal_remote_launch(rreceive, &rrpars, cpu_left_receiver) )
         std::cout << "Error: could not start Responder's Receiver." << std::endl;
   
       std::cout << "Info: Preliminary frame sending started." << std::endl;
@@ -1867,29 +1879,31 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
       // Now the real test may follow.
   
       // set common parameters for senders
-      senderCommonParametersLatency scp2(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc,delay,num_timestamps);
+      scpL=senderCommonParametersLatency(ipv6_frame_size,ipv4_frame_size,frame_rate,duration,n,m,hz,start_tsc,delay,num_timestamps);
   
       if ( reverse) {      // Right to Left direction is active
 
         // set individual parameters for the (normal stateless) right sender
   
         // initialize the parameter class instance for real test (reuse previously prepared 'ipq')
-        senderParametersLatency spars2(&scp2,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
-                                       ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
-                                       fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,right_send_ts);
+        sparsL1=senderParametersLatency(&scpL,ip_right_version,pkt_pool_right_sender,rightport,"Reverse",(ether_addr *)mac_right_dut,(ether_addr *)mac_right_tester,
+                                        ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_right_real,&ipv6_left_real,num_left_nets,
+                                        fwd_var_sport,fwd_var_dport,fwd_sport_min,fwd_sport_max,fwd_dport_min,fwd_dport_max,right_send_ts);
   
         // start right sender
-        if ( rte_eal_remote_launch(sendLatency, &spars2, cpu_right_sender) )
+        if ( rte_eal_remote_launch(sendLatency, &sparsL1, cpu_right_sender) )
           std::cout << "Error: could not start Right Sender." << std::endl;
   
         // set parameters for the left receiver
-        rReceiverParametersLatency rrpars2(finish_receiving,leftport,"Reverse",state_table_size,&valid_entries,&stateTable,num_timestamps,left_receive_ts);
+        rrparsL=rReceiverParametersLatency(finish_receiving,leftport,"Reverse",state_table_size,&valid_entries,&stateTable,num_timestamps,left_receive_ts);
   
         // start left receiver
-        if ( rte_eal_remote_launch(rreceiveLatency, &rrpars2, cpu_left_receiver) )
+        if ( rte_eal_remote_launch(rreceiveLatency, &rrparsL, cpu_left_receiver) )
           std::cout << "Error: could not start Left Receiver." << std::endl;
       }
+
       if ( forward ) {      // Left to right direction is active
+
         // set individual parameters for the left sender
   
         // first, collect the appropriate values dependig on the IP versions
@@ -1897,20 +1911,20 @@ void Latency::measure(uint16_t leftport, uint16_t rightport) {
                    &ipv6_left_real,&ipv6_right_real,&ipv6_left_virtual,&ipv6_right_virtual);
   
         // then, initialize the parameter class instance
-        rSenderParametersLatency spars2(&scp2,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
-                                        ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
-                                        rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
-					state_table_size,stateTable,responder_tuples,left_send_ts);
+        rsparsL=rSenderParametersLatency(&scpL,ip_left_version,pkt_pool_left_sender,leftport,"Forward",(ether_addr *)mac_left_dut,(ether_addr *)mac_left_tester,
+                                         ipq.src_ipv4,ipq.dst_ipv4,ipq.src_ipv6,ipq.dst_ipv6,&ipv6_left_real,&ipv6_right_real,num_right_nets,
+                                         rev_var_sport,rev_var_dport,rev_sport_min,rev_sport_max,rev_dport_min,rev_dport_max,
+					 state_table_size,stateTable,responder_tuples,left_send_ts);
   
         // start left sender
-        if (rte_eal_remote_launch(rsendLatency, &spars2, cpu_left_sender) )
+        if (rte_eal_remote_launch(rsendLatency, &rsparsL, cpu_left_sender) )
           std::cout << "Error: could not start Responder's Sender." << std::endl;
   
         // set parameters for the right receiver
-        receiverParametersLatency rpars2(finish_receiving,rightport,"Forward",num_timestamps,right_receive_ts);
+        rparsL2=receiverParametersLatency(finish_receiving,rightport,"Forward",num_timestamps,right_receive_ts);
   
         // start right receiver
-        if ( rte_eal_remote_launch(receiveLatency, &rpars2, cpu_right_receiver) )
+        if ( rte_eal_remote_launch(receiveLatency, &rparsL2, cpu_right_receiver) )
           std::cout << "Error: could not start Right Receiver." << std::endl;
       }
   
@@ -1946,6 +1960,9 @@ senderCommonParametersLatency::senderCommonParametersLatency(uint16_t ipv6_frame
   delay = delay_;
   num_timestamps = num_timestamps_;
 }
+senderCommonParametersLatency::senderCommonParametersLatency()
+{
+}
 
 senderParametersLatency::senderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
                                                   struct ether_addr *dst_mac_,  struct ether_addr *src_mac_,  uint32_t *src_ipv4_, uint32_t *dst_ipv4_,
@@ -1955,6 +1972,9 @@ senderParametersLatency::senderParametersLatency(class senderCommonParameters *c
   senderParameters(cp_,ip_version_,pkt_pool_,eth_id_,side_,dst_mac_,src_mac_,src_ipv4_,dst_ipv4_,src_ipv6_,dst_ipv6_,src_bg_,dst_bg_,num_dest_nets_,
 		  var_sport_,var_dport_,sport_min_,sport_max_,dport_min_,dport_max_) {
   send_ts = send_ts_;
+}
+senderParametersLatency::senderParametersLatency()
+{
 }
 
 rSenderParametersLatency::rSenderParametersLatency(class senderCommonParameters *cp_, int ip_version_, rte_mempool *pkt_pool_, uint16_t eth_id_, const char *side_,
@@ -1967,12 +1987,18 @@ rSenderParametersLatency::rSenderParametersLatency(class senderCommonParameters 
                     var_sport_,var_dport_,sport_min_,sport_max_,dport_min_,dport_max_,state_table_size_,stateTable_,responder_tuples_) {
   send_ts = send_ts_;
 }
+rSenderParametersLatency::rSenderParametersLatency()
+{
+}
     
 receiverParametersLatency::receiverParametersLatency(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, 
 						     uint16_t num_timestamps_, uint64_t *receive_ts_) :
   receiverParameters(finish_receiving_,eth_id_,side_) {
   num_timestamps = num_timestamps_;
   receive_ts = receive_ts_;
+}
+receiverParametersLatency::receiverParametersLatency()
+{
 }
 
 rReceiverParametersLatency::rReceiverParametersLatency(uint64_t finish_receiving_, uint16_t eth_id_, const char *side_, unsigned state_table_size_,
@@ -1981,7 +2007,9 @@ rReceiverParametersLatency::rReceiverParametersLatency(uint64_t finish_receiving
   num_timestamps = num_timestamps_;
   receive_ts = receive_ts_;
 }
-
+rReceiverParametersLatency::rReceiverParametersLatency()
+{
+}
 
 void evaluateLatency(uint16_t num_timestamps, uint64_t *send_ts, uint64_t *receive_ts, uint64_t hz, int penalty, const char *side) {
   double median_latency, worst_case_latency, *latency = new double[num_timestamps];
