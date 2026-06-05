@@ -784,23 +784,32 @@ int Throughput::init(const char *argv0, uint16_t leftport, uint16_t rightport) {
     rte_eth_promiscuous_enable(rightport);
   }
 
-  // check links' states (wait for coming up), try maximum MAX_PORT_TRIALS times
+  // check links' states (wait for coming up), try maximum MAX_PORT_TRIALS times and sleep for LINK_CHECK_INTERVAL milliseconds between two trials
+  // Left link check
   trials=0;
+  std::cout << "Info: Waiting for Left Ethernet port link..." << std::endl;
   do {
     if ( trials++ == MAX_PORT_TRIALS ) { 
       std::cerr << "Error: Left Ethernet port is DOWN, Tester exits." << std::endl;
       return -1;
     }
+  rte_delay_ms(LINK_CHECK_INTERVAL); // wait for LINK_CHECK_INTERVAL milliseconds before the next trial
   rte_eth_link_get(leftport, &link_info);
   } while ( link_info.link_status == RTE_ETH_LINK_DOWN );
+  std::cout << "Info: Left Ethernet port link is UP:" << link_info.link_speed << " Mbps" << std::endl;
+
+  // Right link check
   trials=0;
+  std::cout << "Info: Waiting for Right Ethernet port link..." << std::endl;
   do {
     if ( trials++ == MAX_PORT_TRIALS ) {
       std::cerr << "Error: Right Ethernet port is DOWN, Tester exits." << std::endl;
       return -1;
     }
+  rte_delay_ms(LINK_CHECK_INTERVAL); // wait for LINK_CHECK_INTERVAL milliseconds before the next trial
   rte_eth_link_get(rightport, &link_info);
   } while ( link_info.link_status == RTE_ETH_LINK_DOWN );
+  std::cout << "Info: Right Ethernet port link is UP:" << link_info.link_speed << " Mbps" << std::endl;
 
   // Some sanity checks: NUMA node of the cores and of the NICs are matching or not...
   if ( numa_available() == -1 )
